@@ -130,10 +130,6 @@ export function EventForm({
           required
         />
       </label>
-      {timeHint ? <p className="hint">{timeHint}</p> : null}
-      <InlineHint question="如何設定開始與結束時間？">
-        開始時間必須晚於現在，結束時間必須晚於開始時間。日期與時間都依台灣時間（Asia/Taipei）計算。
-      </InlineHint>
       <div className="field-grid two">
         <label className="field" htmlFor="event-start-date">
           <span>開始日期</span>
@@ -183,6 +179,7 @@ export function EventForm({
           />
         </label>
       </div>
+      {timeHint ? <p className="hint">{timeHint}</p> : null}
       <label className="field" htmlFor="event-address">
         <span>活動地址</span>
         <input
@@ -213,9 +210,6 @@ export function EventForm({
         />
         開放候補
       </label>
-      <InlineHint question="如何設定候補？">
-        當正式報名額滿後，後續報名者會依序進入候補。有人取消時，系統會自動將最早加入候補的人遞補。
-      </InlineHint>
       {error ? <p className="error">{error}</p> : null}
       <div className="row form-actions">
         <button className="btn" type="submit" disabled={pending}>

@@ -135,12 +135,14 @@ describe('LIFF context token', () => {
       code: 'context_malformed',
     });
     expect(buildLiffUrlWithContext('https://liff.line.me/abc', 'tok.en')).toContain('context=tok.en');
-    const withState = buildLiffUrlWithContext('https://liff.line.me/abc', 'tok.en');
-    expect(withState).toContain('liff.state=');
-    const parsed = new URL(withState);
+    const flexUrl = buildLiffUrlWithContext('https://liff.line.me/abc', 'tok.en');
+    // Must not manually set liff.state on liff.line.me (OAuth 400 risk)
+    expect(flexUrl).not.toContain('liff.state=');
+    const parsed = new URL(flexUrl);
+    expect(parsed.pathname.endsWith('/')).toBe(true);
     expect(parsed.searchParams.get('context')).toBe('tok.en');
-    expect(parsed.searchParams.get('liff.state')).toContain('context=tok.en');
-    expect(withState).not.toMatch(/groupId=/i);
+    expect(parsed.searchParams.get('liff.state')).toBeNull();
+    expect(flexUrl).not.toMatch(/groupId=/i);
   });
 
   it('same secret signs and verifies; expired returns context_expired', async () => {
@@ -159,7 +161,8 @@ describe('LIFF context token', () => {
     const url = buildLiffUrlWithContext('https://liff.line.me/test-liff-id', token);
     const safe = await describeLiffUrlSafe(url, token);
     expect(safe.hasContext).toBe(true);
-    expect(safe.hasLiffState).toBe(true);
+    // Flex URL no longer embeds liff.state; LINE adds it on redirect.
+    expect(safe.hasLiffState).toBe(false);
     expect(safe.tokenLength).toBe(token.length);
     expect(safe.urlLength).toBe(url.length);
     expect(safe.tokenHashPrefix).toMatch(/^[a-f0-9]{8}$/);

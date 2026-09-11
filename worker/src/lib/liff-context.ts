@@ -80,12 +80,24 @@ async function hmacSha256Base64Url(secret: string, message: string): Promise<str
   return bytesToBase64Url(new Uint8Array(signature));
 }
 
+/**
+ * Build a LIFF open URL that carries the signed context token.
+ *
+ * Use path/query AFTER the LIFF ID (`…/{liffId}/?context=…`) so LINE itself
+ * places that suffix into `liff.state` on redirect.
+ *
+ * Do NOT set `liff.state` manually on `liff.line.me` — that conflicts with
+ * LINE Login / OAuth and commonly surfaces as HTTP 400 Bad Request.
+ */
 export function buildLiffUrlWithContext(baseUrl: string, contextToken: string): string {
   const url = new URL(baseUrl);
-  // Primary: query param on LIFF / endpoint URL (URLSearchParams encodes safely)
+  // Normalize to …/{liffId}/?context=TOKEN (additional info after LIFF ID)
+  if (!url.pathname.endsWith('/')) {
+    url.pathname = `${url.pathname}/`;
+  }
+  url.search = '';
+  url.hash = '';
   url.searchParams.set('context', contextToken);
-  // Fallback for LIFF login redirect: recoverable via liff.state parsing
-  url.searchParams.set('liff.state', `/?context=${contextToken}`);
   return url.toString();
 }
 

@@ -113,3 +113,17 @@ describe('contextFromSearchParams / liff.state decode', () => {
     expect(contextFromLiffState(encodeURIComponent(`/?context=${SAMPLE}`))).toBe(SAMPLE);
   });
 });
+
+describe('buildLiffLoginRedirectUri', () => {
+  it('strips query and hash so LINE Login is not fed a long context URL', async () => {
+    const { buildLiffLoginRedirectUri } = await import('./liff-context');
+    expect(
+      buildLiffLoginRedirectUri(
+        `https://joyin-web.pages.dev/?context=${SAMPLE}&liff.state=${encodeURIComponent(`/?context=${SAMPLE}`)}`,
+      ),
+    ).toBe('https://joyin-web.pages.dev/');
+    expect(buildLiffLoginRedirectUri('https://joyin-web.pages.dev/events/new')).toBe(
+      'https://joyin-web.pages.dev/',
+    );
+  });
+});

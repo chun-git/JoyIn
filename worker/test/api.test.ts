@@ -109,12 +109,14 @@ describe('events API', () => {
     const parsed = new URL(flexUrl);
     const fromQuery = parsed.searchParams.get('context') || '';
     expect(fromQuery).toBe(original);
+    expect(parsed.searchParams.get('liff.state')).toBeNull();
     await expect(verifyLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, fromQuery)).resolves.toMatchObject({
       groupId: 'G-test-group',
     });
 
-    const fromStateRaw = parsed.searchParams.get('liff.state') || '';
-    const fromStateUrl = new URL(fromStateRaw, 'https://joyin.invalid');
+    // Simulate LINE primary redirect: additional info lands in liff.state
+    const lineStyleState = `/?context=${original}`;
+    const fromStateUrl = new URL(lineStyleState, 'https://joyin.invalid');
     const fromState = fromStateUrl.searchParams.get('context') || '';
     expect(fromState).toBe(original);
     await expect(verifyLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, fromState)).resolves.toMatchObject({

@@ -1,5 +1,6 @@
 import {
   buildContextDiag,
+  buildLiffLoginRedirectUri,
   getJoyInContextToken,
   preserveJoyInContextBeforeInit,
   type JoyInContextSource,
@@ -98,8 +99,10 @@ export async function initSession(): Promise<LiffSession> {
   await liff.init({ liffId });
 
   if (!liff.isLoggedIn()) {
-    // Must not call APIs after login() — redirect first, then re-init on return.
-    liff.login();
+    // Context is already in sessionStorage (preserveJoyInContextBeforeInit).
+    // Use a clean redirectUri — current URL may include a long ?context= token;
+    // feeding that into LINE Login commonly returns HTTP 400 Bad Request.
+    liff.login({ redirectUri: buildLiffLoginRedirectUri(window.location.href) });
     throw new Error('REDIRECTING');
   }
 

@@ -212,3 +212,13 @@ export function buildContextDiag(
     loadedAt: new Date().toISOString(),
   };
 }
+
+/**
+ * Safe redirect URI for `liff.login()`.
+ * Must start with the LIFF Endpoint URL (https://joyin-web.pages.dev).
+ * Strip query/hash so LINE OAuth is not fed a long ?context= URL (400 Bad Request).
+ */
+export function buildLiffLoginRedirectUri(href: string): string {
+  const url = new URL(href);
+  return `${url.origin}/`;
+}
