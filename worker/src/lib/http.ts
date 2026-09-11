@@ -8,7 +8,7 @@ import { GROUP_CONTEXT_REQUIRED_MESSAGE } from '../middleware/auth';
 export function requireGroupId(c: Context<AppEnv>): string {
   const groupId = c.get('groupId') || '';
   if (!groupId) {
-    throw Errors.unauthorized(GROUP_CONTEXT_REQUIRED_MESSAGE);
+    throw new AppError(401, 'context_missing', GROUP_CONTEXT_REQUIRED_MESSAGE);
   }
   return groupId;
 }
@@ -98,7 +98,19 @@ export function handleRouteError(err: unknown): { status: number; body: { error:
   if (err instanceof AppError) {
     return { status: err.status, body: { error: err.code, message: err.message } };
   }
-  console.error(err);
+  console.error('[JoyIn internal]', {
+    name: err instanceof Error ? err.name : typeof err,
+    message: err instanceof Error ? err.message.slice(0, 160) : String(err).slice(0, 160),
+    stackTop:
+      err instanceof Error
+        ? (err.stack || '')
+            .split('\n')
+            .slice(0, 3)
+            .map((line) => line.trim())
+            .join(' | ')
+            .slice(0, 240)
+        : '',
+  });
   return { status: 500, body: { error: 'INTERNAL', message: '伺服器發生錯誤' } };
 }
 

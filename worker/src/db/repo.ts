@@ -71,11 +71,11 @@ export function toEventSummary(row: EventRow): EventSummary {
     startAt,
     endAt,
     address: row.address,
-    capacity: row.capacity,
+    capacity: Number(row.capacity) || 0,
     waitlistEnabled: asBoolean(row.waitlist_enabled),
     status: row.status,
-    confirmedCount: row.confirmed_count ?? 0,
-    waitlistCount: row.waitlist_count ?? 0,
+    confirmedCount: Number(row.confirmed_count ?? 0) || 0,
+    waitlistCount: Number(row.waitlist_count ?? 0) || 0,
     organizerLineUserId: row.organizer_line_user_id,
     organizerDisplayName: row.organizer_display_name,
     createdAt: row.created_at,
@@ -112,11 +112,15 @@ export async function listUpcomingEvents(
     ORDER BY COALESCE(e.start_at, e.event_at) ASC
     ${limitSql}
   `;
+  if (!groupId) {
+    return [];
+  }
   const stmt = typeof limit === 'number'
     ? db.prepare(sql).bind(groupId, nowIso, limit)
     : db.prepare(sql).bind(groupId, nowIso);
-  const { results } = await stmt.all<EventRow>();
-  return results.map(toEventSummary);
+  const result = await stmt.all<EventRow>();
+  const rows = result.results ?? [];
+  return rows.map(toEventSummary);
 }
 
 export async function getEventRow(

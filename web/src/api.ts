@@ -41,7 +41,11 @@ async function request<T>(path: string, session: LiffSession, init: RequestInit 
   } & T;
 
   if (!response.ok) {
-    throw new ApiError(response.status, data.error || 'ERROR', data.message || '請求失敗');
+    throw new ApiError(
+      response.status,
+      typeof data.error === 'string' ? data.error : 'ERROR',
+      typeof data.message === 'string' ? data.message : '請求失敗',
+    );
   }
   return data;
 }

@@ -5,7 +5,7 @@ import { api, ApiError } from '../api';
 import { EventCard } from '../components/EventCard';
 import { StateBlock } from '../components/StateBlock';
 import { SiteNav } from '../components/SiteNav';
-import { CONTEXT_INVALID_MESSAGE } from '../liff-context';
+import { CONTEXT_INVALID_MESSAGE, CONTEXT_MISSING_MESSAGE } from '../liff-context';
 import type { LiffSession } from '../liff';
 
 export function EventListPage({ session }: { session: LiffSession }) {
@@ -28,7 +28,7 @@ export function EventListPage({ session }: { session: LiffSession }) {
       .listEvents(session)
       .then((result) => {
         if (!cancelled) {
-          setEvents(result.events);
+          setEvents(Array.isArray(result.events) ? result.events : []);
           setListStatus(200);
         }
       })
@@ -45,8 +45,12 @@ export function EventListPage({ session }: { session: LiffSession }) {
             const code = err instanceof ApiError ? err.code : '';
             const apiMessage = err instanceof ApiError ? err.message : err.message;
             if (code.startsWith('context_')) {
-              setErrorTitle(CONTEXT_INVALID_MESSAGE);
-              setError(`驗證失敗（${code}）。請回到 LINE 群組重新輸入 /list，並從新的活動卡片開啟。`);
+              setErrorTitle(code === 'context_missing' ? CONTEXT_MISSING_MESSAGE : CONTEXT_INVALID_MESSAGE);
+              setError(
+                code === 'context_missing'
+                  ? apiMessage
+                  : `驗證失敗（${code}）。請回到 LINE 群組重新輸入 /list，並從新的活動卡片開啟。`,
+              );
             } else if (
               code === 'auth_token_missing' ||
               code === 'auth_token_malformed' ||
@@ -61,8 +65,12 @@ export function EventListPage({ session }: { session: LiffSession }) {
               setErrorTitle('無法驗證登入身分');
               setError(apiMessage || '請重新從 LINE 開啟 JoyIn');
             }
+          } else if (status === 500) {
+            setErrorTitle('無法載入活動');
+            const code = err instanceof ApiError ? err.code : 'INTERNAL';
+            setError(`伺服器發生錯誤${code ? `（${code}）` : ''}。請稍後再試，或重新從 /list 卡片開啟。`);
           } else {
-            setError(err.message);
+            setError(err.message || '載入失敗');
           }
         }
       })

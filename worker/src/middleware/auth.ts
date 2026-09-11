@@ -45,38 +45,91 @@ function parseTestToken(token: string): AuthUser | null {
   return null;
 }
 
+function lineVerifyErrorMessage(data: LineVerifyResponse | null): string {
+  const raw = data?.error_description ?? data?.error;
+  if (typeof raw === 'string' && raw.trim()) {
+    return raw.trim();
+  }
+  if (typeof raw === 'number' || typeof raw === 'boolean') {
+    return String(raw);
+  }
+  return 'LIFF 身分驗證失敗';
+}
+
 export async function verifyLiffIdToken(
   idToken: string,
   channelId: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<AuthUser> {
-  const body = new URLSearchParams({
-    id_token: idToken,
-    client_id: channelId,
-  });
-
-  const response = await fetchImpl('https://api.line.me/oauth2/v2.1/verify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body,
-  });
-
-  const data = (await response.json()) as LineVerifyResponse;
-  if (!response.ok || !data.sub) {
-    const desc = data.error_description || data.error || 'LIFF 身分驗證失敗';
+  const clientId = (channelId || '').trim();
+  if (!clientId) {
     console.error('[JoyIn auth]', {
       reason: 'auth_token_invalid',
       ...describeIdTokenSafe(idToken),
-      hasChannelId: Boolean(channelId),
+      hasChannelId: false,
+      note: 'LINE_CHANNEL_ID_missing',
+    });
+    throw new AppError(401, 'auth_token_invalid', '登入驗證設定不完整');
+  }
+
+  let response: Response;
+  try {
+    const body = new URLSearchParams({
+      id_token: idToken,
+      client_id: clientId,
+    });
+    response = await fetchImpl('https://api.line.me/oauth2/v2.1/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+  } catch (err) {
+    console.error('[JoyIn auth]', {
+      reason: 'auth_token_invalid',
+      ...describeIdTokenSafe(idToken),
+      hasChannelId: true,
+      note: 'line_verify_fetch_failed',
+      errorName: err instanceof Error ? err.name : typeof err,
+    });
+    throw new AppError(401, 'auth_token_invalid', '無法連線至 LINE 驗證服務');
+  }
+
+  let data: LineVerifyResponse | null = null;
+  try {
+    data = (await response.json()) as LineVerifyResponse;
+  } catch (err) {
+    console.error('[JoyIn auth]', {
+      reason: 'auth_token_invalid',
+      ...describeIdTokenSafe(idToken),
+      hasChannelId: true,
+      note: 'line_verify_body_not_json',
+      httpStatus: response.status,
+      errorName: err instanceof Error ? err.name : typeof err,
+    });
+    throw new AppError(401, 'auth_token_invalid', 'LINE 身分驗證回應無效');
+  }
+
+  const sub = typeof data?.sub === 'string' ? data.sub.trim() : '';
+  if (!response.ok || !sub) {
+    const desc = lineVerifyErrorMessage(data);
+    console.error('[JoyIn auth]', {
+      reason: 'auth_token_invalid',
+      ...describeIdTokenSafe(idToken),
+      hasChannelId: true,
+      httpStatus: response.status,
       lineError: desc.slice(0, 80),
     });
     throw new AppError(401, 'auth_token_invalid', desc);
   }
 
+  const displayName =
+    typeof data?.name === 'string' && data.name.trim() ? data.name.trim() : 'LINE 使用者';
+  const pictureUrl = typeof data?.picture === 'string' ? data.picture : undefined;
+
   return {
-    lineUserId: data.sub,
-    displayName: data.name || 'LINE 使用者',
-    pictureUrl: data.picture,
+    lineUserId: sub,
+    displayName,
+    pictureUrl,
   };
 }
 

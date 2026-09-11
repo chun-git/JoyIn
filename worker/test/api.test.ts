@@ -40,13 +40,14 @@ describe('events API', () => {
   });
 
   it('requires a signed LIFF context token', async () => {
-    const { status, body } = await json<{ message: string }>('/api/events', {
+    const { status, body } = await json<{ error: string; message: string }>('/api/events', {
       headers: {
         Authorization: 'Bearer test:U-lee:Lee',
         'Content-Type': 'application/json',
       },
     });
     expect(status).toBe(401);
+    expect(body.error).toBe('context_missing');
     expect(body.message).toContain('/list');
   });
 
