@@ -1,6 +1,5 @@
 import {
   buildContextDiag,
-  buildLiffLoginRedirectUri,
   getJoyInContextToken,
   preserveJoyInContextBeforeInit,
   type JoyInContextSource,
@@ -8,7 +7,7 @@ import {
 import { buildAuthorizationHeader, describeIdTokenSafe, requireLiffIdToken } from './auth-token';
 
 export type { JoyInContextSource };
-export { CONTEXT_MISSING_MESSAGE, CONTEXT_INVALID_MESSAGE } from './liff-context';
+export { CONTEXT_MISSING_MESSAGE, CONTEXT_INVALID_MESSAGE, buildLiffLoginRedirectUri } from './liff-context';
 
 export interface LiffSession {
   idToken: string;
@@ -92,17 +91,30 @@ export async function initSession(): Promise<LiffSession> {
   }
 
   // Capture context before init — LIFF may rewrite/clear query params during init.
-  // Do not mutate location or liff.* query parameters.
+  // Do not mutate location or liff.* query parameters before init resolves.
   preserveJoyInContextBeforeInit();
 
   const liff = (await import('@line/liff')).default;
-  await liff.init({ liffId });
+  // External browser: auto-run login during init. LIFF browser handles consent itself.
+  await liff.init({ liffId, withLoginOnExternalBrowser: true });
 
   if (!liff.isLoggedIn()) {
-    // Context is already in sessionStorage (preserveJoyInContextBeforeInit).
-    // Use a clean redirectUri — current URL may include a long ?context= token;
-    // feeding that into LINE Login commonly returns HTTP 400 Bad Request.
-    liff.login({ redirectUri: buildLiffLoginRedirectUri(window.location.href) });
+    // LINE docs: do NOT call liff.login() inside LIFF browser — it runs as part of
+    // init/open and calling it again commonly yields HTTP 400 for first-time users.
+    if (liff.isInClient()) {
+      throw new Error(
+        '尚未完成 LINE 授權。請關閉視窗後，從群組活動卡片重新開啟，並在授權畫面點選「允許」。',
+      );
+    }
+
+    // External / LINE in-app browser only. Context is already in sessionStorage.
+    // Prefer Endpoint URL default (no custom redirectUri) after cleaning the address bar.
+    try {
+      window.history.replaceState(null, '', '/');
+    } catch {
+      // ignore
+    }
+    liff.login();
     throw new Error('REDIRECTING');
   }
 
@@ -124,6 +136,7 @@ export async function initSession(): Promise<LiffSession> {
     contextSource: contextDiag.contextSource,
     formatOk: contextDiag.formatOk,
     loadedAt: contextDiag.loadedAt,
+    inClient: liff.isInClient(),
   });
 
   return {
