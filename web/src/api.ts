@@ -8,6 +8,7 @@ import type {
   UpdateEventInput,
 } from '../../shared/types';
 import type { LiffSession } from './liff';
+import { buildAuthorizationHeader } from './auth-token';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
@@ -24,7 +25,8 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, session: LiffSession, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
-  headers.set('Authorization', `Bearer ${session.idToken}`);
+  // Single Bearer + raw ID Token string — no encodeURIComponent / JSON.stringify / extra quotes.
+  headers.set('Authorization', buildAuthorizationHeader(session.idToken));
   if (session.contextToken) {
     headers.set('X-JoyIn-Context', session.contextToken);
   }

@@ -43,22 +43,23 @@ export function EventListPage({ session }: { session: LiffSession }) {
           setListStatus(status);
           if (status === 401) {
             const code = err instanceof ApiError ? err.code : '';
+            const apiMessage = err instanceof ApiError ? err.message : err.message;
             if (code.startsWith('context_')) {
               setErrorTitle(CONTEXT_INVALID_MESSAGE);
               setError(`驗證失敗（${code}）。請回到 LINE 群組重新輸入 /list，並從新的活動卡片開啟。`);
-            } else if (code === 'UNAUTHORIZED' || !code) {
-              // Distinguish login failures from context failures when possible
-              const apiMessage = err instanceof ApiError ? err.message : err.message;
-              if (apiMessage.includes('失效') || apiMessage.includes('/list')) {
-                setErrorTitle(CONTEXT_INVALID_MESSAGE);
-                setError(apiMessage);
-              } else {
-                setErrorTitle('無法驗證登入身分');
-                setError(apiMessage || '請重新從 LINE 開啟 JoyIn');
-              }
-            } else {
+            } else if (
+              code === 'auth_token_missing' ||
+              code === 'auth_token_malformed' ||
+              code === 'auth_token_invalid'
+            ) {
+              setErrorTitle('無法驗證登入身分');
+              setError(`${apiMessage}${code ? `（${code}）` : ''}`);
+            } else if (apiMessage.includes('失效') || apiMessage.includes('/list')) {
               setErrorTitle(CONTEXT_INVALID_MESSAGE);
-              setError(err.message);
+              setError(apiMessage);
+            } else {
+              setErrorTitle('無法驗證登入身分');
+              setError(apiMessage || '請重新從 LINE 開啟 JoyIn');
             }
           } else {
             setError(err.message);

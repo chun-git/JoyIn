@@ -4,6 +4,7 @@ import {
   preserveJoyInContextBeforeInit,
   type JoyInContextSource,
 } from './liff-context';
+import { buildAuthorizationHeader, describeIdTokenSafe, requireLiffIdToken } from './auth-token';
 
 export type { JoyInContextSource };
 export { CONTEXT_MISSING_MESSAGE, CONTEXT_INVALID_MESSAGE } from './liff-context';
@@ -34,7 +35,7 @@ async function mintDevContextToken(idToken: string): Promise<string> {
   const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/api/dev/context`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${idToken}`,
+      Authorization: buildAuthorizationHeader(idToken),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ groupId }),
@@ -66,6 +67,7 @@ export async function initSession(): Promise<LiffSession> {
   const allowDev = envFlag(import.meta.env.VITE_DEV_AUTH);
 
   if (allowDev) {
+    // Dev-only synthetic token — never used when VITE_DEV_AUTH=false (production builds).
     const idToken = `test:${import.meta.env.VITE_DEV_USER_ID || 'U-dev'}:${encodeURIComponent(import.meta.env.VITE_DEV_DISPLAY_NAME || '開發者')}`;
     preserveJoyInContextBeforeInit();
     let { token: contextToken, source } = getJoyInContextToken();
@@ -96,21 +98,24 @@ export async function initSession(): Promise<LiffSession> {
   await liff.init({ liffId });
 
   if (!liff.isLoggedIn()) {
-    // sessionStorage already holds context from preserve; login redirect must not clear it yet.
+    // Must not call APIs after login() — redirect first, then re-init on return.
     liff.login();
     throw new Error('REDIRECTING');
   }
 
   const profile = await liff.getProfile();
-  const idToken = liff.getIDToken();
-  if (!idToken) {
-    throw new Error('缺少 LIFF ID Token，請確認 LIFF 設定已開啟 openid');
-  }
+  // Must use ID Token (JWT), never Access Token.
+  const idToken = requireLiffIdToken(liff.getIDToken());
+  const idDiag = describeIdTokenSafe(idToken);
 
   const { token: contextToken, source } = getJoyInContextToken({ clearStorageOnRestore: true });
   const contextDiag = buildContextDiag(contextToken, source);
   // Safe diagnostics only — never log tokens or Authorization.
   console.info('[JoyIn diag]', {
+    idTokenPresent: idDiag.present,
+    idTokenLength: idDiag.tokenLength,
+    idTokenParts: idDiag.partCount,
+    idTokenFormatOk: idDiag.formatOk,
     hasContextToken: contextDiag.hasContextToken,
     contextTokenLength: contextDiag.contextTokenLength,
     contextSource: contextDiag.contextSource,

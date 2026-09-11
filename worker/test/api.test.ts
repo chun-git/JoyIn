@@ -9,8 +9,34 @@ describe('events API', () => {
   });
 
   it('rejects unauthenticated access', async () => {
-    const { status } = await json('/api/events');
+    const { status, body } = await json<{ error: string }>('/api/events');
     expect(status).toBe(401);
+    expect(body.error).toBe('auth_token_missing');
+  });
+
+  it('rejects malformed ID tokens before context checks', async () => {
+    const { status, body } = await json<{ error: string; message: string }>('/api/events', {
+      headers: {
+        Authorization: 'Bearer not-a-jwt-access-token',
+        'Content-Type': 'application/json',
+        'X-JoyIn-Context': 'a.b',
+      },
+    });
+    expect(status).toBe(401);
+    expect(body.error).toBe('auth_token_malformed');
+  });
+
+  it('rejects URL-encoded ID tokens', async () => {
+    const fakeJwt = `${'a'.repeat(12)}.${'b'.repeat(12)}.${'c'.repeat(12)}`;
+    const encoded = fakeJwt.replaceAll('.', '%2E');
+    const { status, body } = await json<{ error: string }>('/api/events', {
+      headers: {
+        Authorization: `Bearer ${encoded}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    expect(status).toBe(401);
+    expect(body.error).toBe('auth_token_malformed');
   });
 
   it('requires a signed LIFF context token', async () => {

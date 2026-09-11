@@ -2,6 +2,11 @@ import type { MiddlewareHandler } from 'hono';
 import type { AppEnv, AuthUser } from '../env';
 import { AppError, Errors } from '../lib/errors';
 import {
+  describeIdTokenSafe,
+  extractBearerToken,
+  isJwtIdTokenFormat,
+} from '../lib/auth-token';
+import {
   describeTokenSafe,
   LiffContextError,
   verifyLiffContext,
@@ -58,7 +63,14 @@ export async function verifyLiffIdToken(
 
   const data = (await response.json()) as LineVerifyResponse;
   if (!response.ok || !data.sub) {
-    throw Errors.unauthorized(data.error_description || 'LIFF 身分驗證失敗');
+    const desc = data.error_description || data.error || 'LIFF 身分驗證失敗';
+    console.error('[JoyIn auth]', {
+      reason: 'auth_token_invalid',
+      ...describeIdTokenSafe(idToken),
+      hasChannelId: Boolean(channelId),
+      lineError: desc.slice(0, 80),
+    });
+    throw new AppError(401, 'auth_token_invalid', desc);
   }
 
   return {
@@ -89,7 +101,6 @@ async function resolveVerifiedGroupId(c: {
       ...tokenDiag,
       hasExpiresAt: Boolean(verified.expiresAt),
       hasNonce: Boolean(verified.nonce),
-      // never log groupId value — only length
       groupIdLength: verified.groupId.length,
     });
     return verified.groupId;
@@ -107,10 +118,28 @@ async function resolveVerifiedGroupId(c: {
 
 export const liffAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   const header = c.req.header('Authorization') || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-  if (!token) {
-    throw Errors.unauthorized();
+  const extracted = extractBearerToken(header);
+  if (!extracted.ok) {
+    console.error('[JoyIn auth]', {
+      reason: extracted.code,
+      hasAuthorizationHeader: Boolean(header.trim()),
+      hasLiffId: Boolean(c.env.LIFF_ID),
+    });
+    throw new AppError(
+      401,
+      extracted.code,
+      extracted.code === 'auth_token_missing' ? '請先透過 LIFF 登入' : '登入 Token 格式錯誤',
+    );
   }
+
+  const token = extracted.token;
+  const idDiag = describeIdTokenSafe(token);
+  console.info('[JoyIn auth]', {
+    reason: 'received',
+    hasAuthorizationHeader: true,
+    ...idDiag,
+    hasLiffId: Boolean(c.env.LIFF_ID),
+  });
 
   const allowTest = c.env.ALLOW_TEST_AUTH === 'true';
   if (allowTest) {
@@ -121,6 +150,16 @@ export const liffAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
       await next();
       return;
     }
+  }
+
+  if (!isJwtIdTokenFormat(token)) {
+    console.error('[JoyIn auth]', {
+      reason: 'auth_token_malformed',
+      ...idDiag,
+      hasLiffId: Boolean(c.env.LIFF_ID),
+      note: 'expected_three_part_jwt_id_token',
+    });
+    throw new AppError(401, 'auth_token_malformed', '登入 Token 格式錯誤（需要 LIFF ID Token）');
   }
 
   const user = await verifyLiffIdToken(token, c.env.LINE_CHANNEL_ID);
