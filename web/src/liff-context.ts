@@ -6,6 +6,9 @@ export const CONTEXT_MISSING_MESSAGE =
 
 export const CONTEXT_INVALID_MESSAGE = '活動連結已失效，請重新輸入 /list';
 
+/** Must match Worker signed token shape: base64url.payload */
+export const LIFF_CONTEXT_TOKEN_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+
 export type JoyInContextSource = 'search' | 'liff.state' | 'sessionStorage' | '';
 
 export interface JoyInContextResult {
@@ -19,42 +22,59 @@ export interface StorageLike {
   removeItem(key: string): void;
 }
 
-function contextFromSearchParams(search: string): string {
+export function isJoyInContextTokenFormat(token: string): boolean {
+  const trimmed = token.trim();
+  if (!LIFF_CONTEXT_TOKEN_RE.test(trimmed)) return false;
+  return trimmed.split('.').length === 2;
+}
+
+/**
+ * Read `context` from a query string.
+ * URLSearchParams.get() already performs a single URL decode — do not decode again.
+ */
+export function contextFromSearchParams(search: string): string {
   const normalized = search.startsWith('?') ? search.slice(1) : search;
   if (!normalized) return '';
   try {
-    return (new URLSearchParams(normalized).get('context') || '').trim();
+    const value = (new URLSearchParams(normalized).get('context') || '').trim();
+    return isJoyInContextTokenFormat(value) ? value : '';
   } catch {
     return '';
   }
 }
 
 /**
- * Parse LIFF `liff.state` which may be a path, query, or URL-encoded form such as:
- * `/?context=...`, `/events?context=...`, or a percent-encoded full path.
+ * Parse LIFF `liff.state` for an embedded context token.
+ * URLSearchParams.get('liff.state') already decodes once.
+ * Only apply an extra decodeURIComponent when the value still looks percent-encoded.
+ * Never treat the entire liff.state string as the token.
  */
 export function contextFromLiffState(raw: string | null | undefined): string {
   if (!raw) return '';
-  const candidates = [raw];
-  try {
-    candidates.push(decodeURIComponent(raw));
-  } catch {
-    // ignore
-  }
-  try {
-    candidates.push(decodeURIComponent(decodeURIComponent(raw)));
-  } catch {
-    // ignore
+
+  const candidates: string[] = [raw];
+  // One extra decode only when still percent-encoded (e.g. %2F%3Fcontext%3D...)
+  if (/%[0-9A-Fa-f]{2}/.test(raw)) {
+    try {
+      candidates.push(decodeURIComponent(raw));
+    } catch {
+      // ignore malformed escape sequences
+    }
   }
 
   for (const candidate of candidates) {
     const value = candidate.trim();
     if (!value) continue;
+    // Never accept the raw liff.state blob as a token
+    if (isJoyInContextTokenFormat(value) && !value.includes('context=')) {
+      continue;
+    }
 
     try {
       const asUrl = new URL(value, 'https://joyin.invalid');
       const fromUrl = (asUrl.searchParams.get('context') || '').trim();
-      if (fromUrl) return fromUrl;
+      // searchParams.get already decoded once within this URL parse
+      if (isJoyInContextTokenFormat(fromUrl)) return fromUrl;
     } catch {
       // continue
     }
@@ -63,7 +83,7 @@ export function contextFromLiffState(raw: string | null | undefined): string {
       const query = value.includes('?') ? value.slice(value.indexOf('?') + 1) : value;
       try {
         const fromQuery = (new URLSearchParams(query).get('context') || '').trim();
-        if (fromQuery) return fromQuery;
+        if (isJoyInContextTokenFormat(fromQuery)) return fromQuery;
       } catch {
         // continue
       }
@@ -163,7 +183,7 @@ export function getJoyInContextToken(options?: {
   }
 
   const stored = safeStorageGet(storage, JOYIN_CONTEXT_STORAGE_KEY);
-  if (stored) {
+  if (stored && isJoyInContextTokenFormat(stored)) {
     if (clearStorageOnRestore) {
       safeStorageRemove(storage, JOYIN_CONTEXT_STORAGE_KEY);
     }
@@ -181,12 +201,14 @@ export function buildContextDiag(
   hasContextToken: boolean;
   contextTokenLength: number;
   contextSource: JoyInContextSource;
+  formatOk: boolean;
   loadedAt: string;
 } {
   return {
     hasContextToken: Boolean(token),
     contextTokenLength: token.length,
     contextSource: source,
+    formatOk: isJoyInContextTokenFormat(token),
     loadedAt: new Date().toISOString(),
   };
 }

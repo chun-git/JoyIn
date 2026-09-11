@@ -119,14 +119,21 @@ describe('LIFF context token', () => {
     expect(verified.expiresAt).toBeGreaterThan(Date.now());
   });
 
-  it('rejects tampered tokens and wrong secrets', async () => {
+  it('rejects tampered tokens and wrong secrets with classified codes', async () => {
     const { signLiffContext, verifyLiffContext, buildLiffUrlWithContext } = await import(
       '../src/lib/liff-context'
     );
     const token = await signLiffContext('unit-secret', 'Cgroup123');
-    await expect(verifyLiffContext('other-secret', token)).rejects.toThrow();
+    await expect(verifyLiffContext('other-secret', token)).rejects.toMatchObject({
+      code: 'context_signature_mismatch',
+    });
     const [body, sig] = token.split('.');
-    await expect(verifyLiffContext('unit-secret', `${body}.${sig}x`)).rejects.toThrow();
+    await expect(verifyLiffContext('unit-secret', `${body}.${sig}x`)).rejects.toMatchObject({
+      code: 'context_signature_mismatch',
+    });
+    await expect(verifyLiffContext('unit-secret', 'not-a-token')).rejects.toMatchObject({
+      code: 'context_malformed',
+    });
     expect(buildLiffUrlWithContext('https://liff.line.me/abc', 'tok.en')).toContain('context=tok.en');
     const withState = buildLiffUrlWithContext('https://liff.line.me/abc', 'tok.en');
     expect(withState).toContain('liff.state=');
@@ -134,6 +141,16 @@ describe('LIFF context token', () => {
     expect(parsed.searchParams.get('context')).toBe('tok.en');
     expect(parsed.searchParams.get('liff.state')).toContain('context=tok.en');
     expect(withState).not.toMatch(/groupId=/i);
+  });
+
+  it('same secret signs and verifies; expired returns context_expired', async () => {
+    const { signLiffContext, verifyLiffContext } = await import('../src/lib/liff-context');
+    const token = await signLiffContext('same-secret', 'G1');
+    await expect(verifyLiffContext('same-secret', token)).resolves.toMatchObject({ groupId: 'G1' });
+    const expired = await signLiffContext('same-secret', 'G1', Date.now() - 10_000, 1);
+    await expect(verifyLiffContext('same-secret', expired)).rejects.toMatchObject({
+      code: 'context_expired',
+    });
   });
 
   it('describeLiffUrlSafe omits token and full URI', async () => {

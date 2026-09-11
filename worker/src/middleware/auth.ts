@@ -1,7 +1,11 @@
 import type { MiddlewareHandler } from 'hono';
 import type { AppEnv, AuthUser } from '../env';
-import { Errors } from '../lib/errors';
-import { LiffContextError, verifyLiffContext } from '../lib/liff-context';
+import { AppError, Errors } from '../lib/errors';
+import {
+  describeTokenSafe,
+  LiffContextError,
+  verifyLiffContext,
+} from '../lib/liff-context';
 
 interface LineVerifyResponse {
   iss?: string;
@@ -12,9 +16,12 @@ interface LineVerifyResponse {
   error_description?: string;
 }
 
-/** User-facing copy when group context is missing or invalid */
+/** User-facing copy when group context is missing */
 export const GROUP_CONTEXT_REQUIRED_MESSAGE =
   '請回到 LINE 群組輸入 /list，並從活動卡片開啟 JoyIn';
+
+/** User-facing copy when a context token is present but invalid */
+export const GROUP_CONTEXT_INVALID_MESSAGE = '活動連結已失效，請重新輸入 /list';
 
 function parseTestToken(token: string): AuthUser | null {
   if (token === 'dev-token') {
@@ -70,15 +77,29 @@ async function resolveVerifiedGroupId(c: {
   env: AppEnv['Bindings'];
 }): Promise<string> {
   const token = (c.req.header('X-JoyIn-Context') || '').trim();
+  const tokenDiag = describeTokenSafe(token);
   if (!token) {
+    console.info('[JoyIn context]', { reason: 'context_missing', ...tokenDiag });
     return '';
   }
   try {
     const verified = await verifyLiffContext(c.env.LIFF_CONTEXT_SIGNING_SECRET, token);
+    console.info('[JoyIn context]', {
+      reason: 'ok',
+      ...tokenDiag,
+      hasExpiresAt: Boolean(verified.expiresAt),
+      hasNonce: Boolean(verified.nonce),
+      // never log groupId value — only length
+      groupIdLength: verified.groupId.length,
+    });
     return verified.groupId;
   } catch (err) {
     if (err instanceof LiffContextError) {
-      throw Errors.unauthorized(GROUP_CONTEXT_REQUIRED_MESSAGE);
+      console.error('[JoyIn context]', {
+        reason: err.code,
+        ...tokenDiag,
+      });
+      throw new AppError(401, err.code, GROUP_CONTEXT_INVALID_MESSAGE);
     }
     throw err;
   }

@@ -3,6 +3,14 @@ import { timingSafeEqual } from './ids';
 /** LIFF context token TTL: 24 hours */
 export const LIFF_CONTEXT_TTL_MS = 24 * 60 * 60 * 1000;
 
+export type LiffContextErrorCode =
+  | 'context_missing'
+  | 'context_malformed'
+  | 'context_expired'
+  | 'context_signature_mismatch'
+  | 'context_payload_invalid'
+  | 'context_secret_missing';
+
 export interface LiffContextPayload {
   /** LINE Messaging API groupId (C…) */
   g: string;
@@ -10,6 +18,31 @@ export interface LiffContextPayload {
   exp: number;
   /** Nonce — must be present and non-empty */
   n: string;
+}
+
+/** Signed token shape: base64url(payload).base64url(hmac) — no extra decode needed after URLSearchParams.get */
+export const LIFF_CONTEXT_TOKEN_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+
+export function isLiffContextTokenFormat(token: string): boolean {
+  const trimmed = token.trim();
+  if (!LIFF_CONTEXT_TOKEN_RE.test(trimmed)) return false;
+  const parts = trimmed.split('.');
+  return parts.length === 2 && Boolean(parts[0] && parts[1]);
+}
+
+export function describeTokenSafe(token: string): {
+  present: boolean;
+  tokenLength: number;
+  partCount: number;
+  formatOk: boolean;
+} {
+  const trimmed = (token || '').trim();
+  return {
+    present: Boolean(trimmed),
+    tokenLength: trimmed.length,
+    partCount: trimmed ? trimmed.split('.').length : 0,
+    formatOk: isLiffContextTokenFormat(trimmed),
+  };
 }
 
 function bytesToBase64Url(bytes: Uint8Array): string {
@@ -66,6 +99,7 @@ export async function describeLiffUrlSafe(
   tokenLength: number;
   urlLength: number;
   tokenHashPrefix: string;
+  formatOk: boolean;
 }> {
   let hasContext = false;
   let hasLiffState = false;
@@ -85,6 +119,7 @@ export async function describeLiffUrlSafe(
     tokenLength: contextToken.length,
     urlLength: liffUrl.length,
     tokenHashPrefix: hex.slice(0, 8),
+    formatOk: isLiffContextTokenFormat(contextToken),
   };
 }
 
@@ -112,7 +147,10 @@ export async function signLiffContext(
 }
 
 export class LiffContextError extends Error {
-  constructor(message: string) {
+  constructor(
+    public readonly code: LiffContextErrorCode,
+    message: string,
+  ) {
     super(message);
     this.name = 'LiffContextError';
   }
@@ -124,40 +162,40 @@ export async function verifyLiffContext(
   nowMs = Date.now(),
 ): Promise<{ groupId: string; expiresAt: number; nonce: string }> {
   if (!secret) {
-    throw new LiffContextError('missing signing secret');
+    throw new LiffContextError('context_secret_missing', 'missing signing secret');
   }
   const trimmed = token.trim();
   if (!trimmed) {
-    throw new LiffContextError('missing token');
+    throw new LiffContextError('context_missing', 'missing token');
+  }
+  if (!isLiffContextTokenFormat(trimmed)) {
+    throw new LiffContextError('context_malformed', 'invalid token format');
   }
   const parts = trimmed.split('.');
-  if (parts.length !== 2 || !parts[0] || !parts[1]) {
-    throw new LiffContextError('invalid token format');
-  }
   const [body, sig] = parts;
   const expected = await hmacSha256Base64Url(secret, body);
-  if (!timingSafeEqual(expected, sig)) {
-    throw new LiffContextError('invalid signature');
+  if (expected.length !== sig.length || !timingSafeEqual(expected, sig)) {
+    throw new LiffContextError('context_signature_mismatch', 'invalid signature');
   }
 
   let payload: LiffContextPayload;
   try {
     payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(body))) as LiffContextPayload;
   } catch {
-    throw new LiffContextError('invalid payload');
+    throw new LiffContextError('context_payload_invalid', 'invalid payload');
   }
 
   if (typeof payload.g !== 'string' || !payload.g.trim()) {
-    throw new LiffContextError('missing groupId');
+    throw new LiffContextError('context_payload_invalid', 'missing groupId');
   }
   if (typeof payload.n !== 'string' || !payload.n.trim()) {
-    throw new LiffContextError('missing nonce');
+    throw new LiffContextError('context_payload_invalid', 'missing nonce');
   }
   if (typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) {
-    throw new LiffContextError('missing expiry');
+    throw new LiffContextError('context_payload_invalid', 'missing expiry');
   }
   if (payload.exp <= nowMs) {
-    throw new LiffContextError('token expired');
+    throw new LiffContextError('context_expired', 'token expired');
   }
 
   return {

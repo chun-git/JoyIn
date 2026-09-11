@@ -20,6 +20,7 @@ export interface LiffSession {
     hasContextToken: boolean;
     contextTokenLength: number;
     contextSource: JoyInContextSource;
+    formatOk?: boolean;
     loadedAt: string;
   };
 }
@@ -113,6 +114,7 @@ export async function initSession(): Promise<LiffSession> {
     hasContextToken: contextDiag.hasContextToken,
     contextTokenLength: contextDiag.contextTokenLength,
     contextSource: contextDiag.contextSource,
+    formatOk: contextDiag.formatOk,
     loadedAt: contextDiag.loadedAt,
   });
 

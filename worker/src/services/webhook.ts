@@ -101,16 +101,34 @@ export async function handleLineWebhook(
     const baseUrl = env.LIFF_URL || `https://liff.line.me/${env.LIFF_ID}`;
     const liffUrl = buildLiffUrlWithContext(baseUrl, contextToken);
     const safe = await describeLiffUrlSafe(liffUrl, contextToken);
+    // Decode payload fields for safe diagnostics only (no groupId / token values)
+    let hasExpiresAt = false;
+    let hasNonce = false;
+    try {
+      const body = contextToken.split('.')[0] || '';
+      const padded = body.replace(/-/g, '+').replace(/_/g, '/');
+      const pad = padded.length % 4 === 0 ? '' : '='.repeat(4 - (padded.length % 4));
+      const json = JSON.parse(atob(padded + pad)) as { exp?: number; n?: string };
+      hasExpiresAt = typeof json.exp === 'number' && Number.isFinite(json.exp) && json.exp > Date.now();
+      hasNonce = typeof json.n === 'string' && json.n.length > 0;
+    } catch {
+      // ignore — formatOk below covers this
+    }
     console.info('[JoyIn /list flex]', {
+      tokenSource: 'webhook',
       hasContext: safe.hasContext,
       hasLiffState: safe.hasLiffState,
       tokenLength: safe.tokenLength,
       urlLength: safe.urlLength,
       tokenHashPrefix: safe.tokenHashPrefix,
+      formatOk: safe.formatOk,
+      hasExpiresAt,
+      hasNonce,
     });
-    if (!safe.hasContext || safe.urlLength > 1000) {
+    if (!safe.hasContext || !safe.formatOk || safe.urlLength > 1000) {
       console.error('[JoyIn /list flex] invalid URI shape', {
         hasContext: safe.hasContext,
+        formatOk: safe.formatOk,
         urlLength: safe.urlLength,
       });
       continue;

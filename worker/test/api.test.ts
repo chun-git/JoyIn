@@ -42,7 +42,7 @@ describe('events API', () => {
     const [bodyPart, sig] = valid.split('.');
     const tampered = `${bodyPart}.${sig.slice(0, -2)}aa`;
 
-    const tamperedRes = await json('/api/events', {
+    const tamperedRes = await json<{ error: string; message: string }>('/api/events', {
       headers: {
         Authorization: 'Bearer test:U-lee:Lee',
         'Content-Type': 'application/json',
@@ -50,6 +50,7 @@ describe('events API', () => {
       },
     });
     expect(tamperedRes.status).toBe(401);
+    expect(tamperedRes.body.error).toBe('context_signature_mismatch');
 
     const expired = await signLiffContext(
       env.LIFF_CONTEXT_SIGNING_SECRET,
@@ -59,8 +60,8 @@ describe('events API', () => {
     );
     await expect(
       verifyLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, expired, Date.now()),
-    ).rejects.toThrow(/expired/);
-    const expiredRes = await json('/api/events', {
+    ).rejects.toMatchObject({ code: 'context_expired' });
+    const expiredRes = await json<{ error: string }>('/api/events', {
       headers: {
         Authorization: 'Bearer test:U-lee:Lee',
         'Content-Type': 'application/json',
@@ -68,6 +69,39 @@ describe('events API', () => {
       },
     });
     expect(expiredRes.status).toBe(401);
+    expect(expiredRes.body.error).toBe('context_expired');
+  });
+
+  it('accepts tokens after Flex URL / liff.state / sessionStorage round-trips', async () => {
+    const { signLiffContext, verifyLiffContext, buildLiffUrlWithContext } = await import(
+      '../src/lib/liff-context'
+    );
+    const { env } = await import('cloudflare:test');
+    const original = await signLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, 'G-test-group');
+    const flexUrl = buildLiffUrlWithContext('https://liff.line.me/test-liff-id', original);
+    const parsed = new URL(flexUrl);
+    const fromQuery = parsed.searchParams.get('context') || '';
+    expect(fromQuery).toBe(original);
+    await expect(verifyLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, fromQuery)).resolves.toMatchObject({
+      groupId: 'G-test-group',
+    });
+
+    const fromStateRaw = parsed.searchParams.get('liff.state') || '';
+    const fromStateUrl = new URL(fromStateRaw, 'https://joyin.invalid');
+    const fromState = fromStateUrl.searchParams.get('context') || '';
+    expect(fromState).toBe(original);
+    await expect(verifyLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, fromState)).resolves.toMatchObject({
+      groupId: 'G-test-group',
+    });
+
+    const list = await json<{ events: unknown[] }>('/api/events', {
+      headers: {
+        Authorization: 'Bearer test:U-lee:Lee',
+        'Content-Type': 'application/json',
+        'X-JoyIn-Context': fromState,
+      },
+    });
+    expect(list.status).toBe(200);
   });
 
   it('isolates events by verified context groupId', async () => {

@@ -42,8 +42,24 @@ export function EventListPage({ session }: { session: LiffSession }) {
                 : null;
           setListStatus(status);
           if (status === 401) {
-            setErrorTitle(CONTEXT_INVALID_MESSAGE);
-            setError('請回到 LINE 群組重新輸入 /list，並從新的活動卡片開啟。');
+            const code = err instanceof ApiError ? err.code : '';
+            if (code.startsWith('context_')) {
+              setErrorTitle(CONTEXT_INVALID_MESSAGE);
+              setError(`驗證失敗（${code}）。請回到 LINE 群組重新輸入 /list，並從新的活動卡片開啟。`);
+            } else if (code === 'UNAUTHORIZED' || !code) {
+              // Distinguish login failures from context failures when possible
+              const apiMessage = err instanceof ApiError ? err.message : err.message;
+              if (apiMessage.includes('失效') || apiMessage.includes('/list')) {
+                setErrorTitle(CONTEXT_INVALID_MESSAGE);
+                setError(apiMessage);
+              } else {
+                setErrorTitle('無法驗證登入身分');
+                setError(apiMessage || '請重新從 LINE 開啟 JoyIn');
+              }
+            } else {
+              setErrorTitle(CONTEXT_INVALID_MESSAGE);
+              setError(err.message);
+            }
           } else {
             setError(err.message);
           }
@@ -74,6 +90,7 @@ export function EventListPage({ session }: { session: LiffSession }) {
               `has context token: ${String(session.contextDiag?.hasContextToken ?? false)}`,
               `context token length: ${session.contextDiag?.contextTokenLength ?? 0}`,
               `context source: ${session.contextDiag?.contextSource || '(none)'}`,
+              `context format ok: ${String(session.contextDiag?.formatOk ?? false)}`,
               `GET /api/events status: ${listStatus ?? '(pending)'}`,
               `GET /api/events count: ${loading ? '(loading)' : sorted.length}`,
               `page loadedAt: ${session.contextDiag?.loadedAt ?? '(n/a)'}`,
