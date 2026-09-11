@@ -7,14 +7,19 @@ export function SiteNav({ current }: { current?: 'events' | 'help' }) {
         JoyIn
       </Link>
       <div className="site-nav-links">
-        <Link to="/" aria-current={current === 'events' ? 'page' : undefined}>
+        <Link
+          to="/"
+          className="site-nav-pill"
+          aria-current={current === 'events' ? 'page' : undefined}
+        >
           活動
         </Link>
-        <Link to="/help" aria-current={current === 'help' ? 'page' : undefined}>
+        <Link
+          to="/help"
+          className="site-nav-pill"
+          aria-current={current === 'help' ? 'page' : undefined}
+        >
           使用手冊
-        </Link>
-        <Link to="/help" className="help-q" aria-label="開啟使用手冊">
-          ?
         </Link>
       </div>
     </nav>

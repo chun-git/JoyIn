@@ -1,6 +1,7 @@
 import type { MiddlewareHandler } from 'hono';
 import type { AppEnv, AuthUser } from '../env';
 import { Errors } from '../lib/errors';
+import { LiffContextError, verifyLiffContext } from '../lib/liff-context';
 
 interface LineVerifyResponse {
   iss?: string;
@@ -10,6 +11,10 @@ interface LineVerifyResponse {
   error?: string;
   error_description?: string;
 }
+
+/** User-facing copy when group context is missing or invalid */
+export const GROUP_CONTEXT_REQUIRED_MESSAGE =
+  '請回到 LINE 群組輸入 /list，並從活動卡片開啟 JoyIn';
 
 function parseTestToken(token: string): AuthUser | null {
   if (token === 'dev-token') {
@@ -56,6 +61,29 @@ export async function verifyLiffIdToken(
   };
 }
 
+/**
+ * Resolve groupId only from a verified X-JoyIn-Context token.
+ * Never trusts X-Line-Group-Id or any client-supplied group identifier.
+ */
+async function resolveVerifiedGroupId(c: {
+  req: { header: (name: string) => string | undefined };
+  env: AppEnv['Bindings'];
+}): Promise<string> {
+  const token = (c.req.header('X-JoyIn-Context') || '').trim();
+  if (!token) {
+    return '';
+  }
+  try {
+    const verified = await verifyLiffContext(c.env.LIFF_CONTEXT_SIGNING_SECRET, token);
+    return verified.groupId;
+  } catch (err) {
+    if (err instanceof LiffContextError) {
+      throw Errors.unauthorized(GROUP_CONTEXT_REQUIRED_MESSAGE);
+    }
+    throw err;
+  }
+}
+
 export const liffAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   const header = c.req.header('Authorization') || '';
   const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
@@ -68,7 +96,7 @@ export const liffAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
     const testUser = parseTestToken(token);
     if (testUser) {
       c.set('user', testUser);
-      c.set('groupId', c.req.header('X-Line-Group-Id') || '');
+      c.set('groupId', await resolveVerifiedGroupId(c));
       await next();
       return;
     }
@@ -76,6 +104,6 @@ export const liffAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
 
   const user = await verifyLiffIdToken(token, c.env.LINE_CHANNEL_ID);
   c.set('user', user);
-  c.set('groupId', c.req.header('X-Line-Group-Id') || '');
+  c.set('groupId', await resolveVerifiedGroupId(c));
   await next();
 };

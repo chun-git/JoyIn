@@ -2,11 +2,13 @@ import type { Context } from 'hono';
 import type { AppEnv, AuthUser } from '../env';
 import { AppError, Errors } from './errors';
 import { DATE_RE, TIME_RE, toEventAt, validateEventSchedule } from './datetime';
+import { GROUP_CONTEXT_REQUIRED_MESSAGE } from '../middleware/auth';
 
+/** Group id must come from a verified LIFF context token (set by liffAuth). */
 export function requireGroupId(c: Context<AppEnv>): string {
-  const groupId = c.get('groupId') || c.req.header('X-Line-Group-Id') || '';
+  const groupId = c.get('groupId') || '';
   if (!groupId) {
-    throw Errors.validation('請從 LINE 群組開啟 JoyIn');
+    throw Errors.unauthorized(GROUP_CONTEXT_REQUIRED_MESSAGE);
   }
   return groupId;
 }

@@ -43,7 +43,7 @@ export function TransferInvitePage({ session }: { session: LiffSession }) {
     try {
       const result = await api.acceptTransferInvite(session, token);
       setNotice('主揪已轉移給你');
-      if (session.groupId) {
+      if (session.contextToken) {
         navigate(`/events/${result.event.eventId}`);
       }
     } catch (err) {

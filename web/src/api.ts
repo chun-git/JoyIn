@@ -25,8 +25,8 @@ export class ApiError extends Error {
 async function request<T>(path: string, session: LiffSession, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${session.idToken}`);
-  if (session.groupId) {
-    headers.set('X-Line-Group-Id', session.groupId);
+  if (session.contextToken) {
+    headers.set('X-JoyIn-Context', session.contextToken);
   }
   if (init.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');

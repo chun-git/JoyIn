@@ -21,12 +21,12 @@ function GroupGate({
   session: LiffSession;
   children: ReactNode;
 }) {
-  if (!session.groupId) {
+  if (!session.contextToken) {
     return (
       <div className="stack">
         <SiteNav current="events" />
-        <StateBlock kind="error" title="請從 LINE 群組開啟 JoyIn">
-          活動屬於群組，請在群組中輸入 /list 後再開啟。
+        <StateBlock kind="error" title="請回到 LINE 群組輸入 /list，並從活動卡片開啟 JoyIn">
+          活動屬於群組。請在群組輸入 /list，再從活動卡片開啟 JoyIn。
           <div className="row" style={{ marginTop: 12, justifyContent: 'center' }}>
             <Link to="/help" className="btn secondary">
               查看使用手冊

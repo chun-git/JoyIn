@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../env';
 import { liffAuth } from '../middleware/auth';
-import { AppError } from '../lib/errors';
+import { AppError, Errors } from '../lib/errors';
+import { signLiffContext } from '../lib/liff-context';
 import {
   handleRouteError,
   parseJson,
@@ -47,6 +48,17 @@ api.get('/config', (c) =>
     liffUrl: c.env.LIFF_URL || '',
   }),
 );
+
+/** Local / test-only: mint a signed context token. Disabled when ALLOW_TEST_AUTH is not true. */
+api.post('/dev/context', liffAuth, async (c) => {
+  if (c.env.ALLOW_TEST_AUTH !== 'true') {
+    throw Errors.notFound();
+  }
+  const body = parseJson<Record<string, unknown>>(await c.req.json());
+  const groupId = requireString(body.groupId, 'groupId', 1, 64);
+  const context = await signLiffContext(c.env.LIFF_CONTEXT_SIGNING_SECRET, groupId);
+  return c.json({ context });
+});
 
 api.use('/events/*', liffAuth);
 api.use('/events', liffAuth);
@@ -181,7 +193,7 @@ api.post('/transfer-invites/:token/accept', async (c) => {
 });
 
 api.delete('/registrations/:registrationId', async (c) => {
-  const groupId = c.req.header('X-Line-Group-Id') || undefined;
+  const groupId = requireGroupId(c);
   const result = await cancelRegistration(
     c.env.DB,
     c.req.param('registrationId'),

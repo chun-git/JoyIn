@@ -22,7 +22,7 @@ const session: LiffSession = {
   idToken: 'test:U-lee:Lee',
   lineUserId: 'U-lee',
   displayName: 'Lee',
-  groupId: 'G-test-group',
+  contextToken: 'test-context-token',
   inClient: false,
 };
 

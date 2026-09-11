@@ -13,15 +13,77 @@ describe('events API', () => {
     expect(status).toBe(401);
   });
 
-  it('requires a LINE group id', async () => {
+  it('requires a signed LIFF context token', async () => {
     const { status, body } = await json<{ message: string }>('/api/events', {
       headers: {
         Authorization: 'Bearer test:U-lee:Lee',
         'Content-Type': 'application/json',
       },
     });
-    expect(status).toBe(400);
-    expect(body.message).toContain('群組');
+    expect(status).toBe(401);
+    expect(body.message).toContain('/list');
+  });
+
+  it('rejects forged X-Line-Group-Id without a context token', async () => {
+    const { status } = await json('/api/events', {
+      headers: {
+        Authorization: 'Bearer test:U-lee:Lee',
+        'Content-Type': 'application/json',
+        'X-Line-Group-Id': 'G-forged',
+      },
+    });
+    expect(status).toBe(401);
+  });
+
+  it('rejects tampered and expired context tokens', async () => {
+    const { signLiffContext, verifyLiffContext } = await import('../src/lib/liff-context');
+    const { env } = await import('cloudflare:test');
+    const valid = await signLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, 'G-test-group');
+    const [bodyPart, sig] = valid.split('.');
+    const tampered = `${bodyPart}.${sig.slice(0, -2)}aa`;
+
+    const tamperedRes = await json('/api/events', {
+      headers: {
+        Authorization: 'Bearer test:U-lee:Lee',
+        'Content-Type': 'application/json',
+        'X-JoyIn-Context': tampered,
+      },
+    });
+    expect(tamperedRes.status).toBe(401);
+
+    const expired = await signLiffContext(
+      env.LIFF_CONTEXT_SIGNING_SECRET,
+      'G-test-group',
+      Date.now() - 60_000,
+      1,
+    );
+    await expect(
+      verifyLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, expired, Date.now()),
+    ).rejects.toThrow(/expired/);
+    const expiredRes = await json('/api/events', {
+      headers: {
+        Authorization: 'Bearer test:U-lee:Lee',
+        'Content-Type': 'application/json',
+        'X-JoyIn-Context': expired,
+      },
+    });
+    expect(expiredRes.status).toBe(401);
+  });
+
+  it('isolates events by verified context groupId', async () => {
+    const a = await createEvent('U-lee', 'Lee', { name: '群組 A 活動' });
+    expect(a.status).toBe(201);
+
+    const otherList = await json<{ events: Array<{ name: string }> }>('/api/events', {
+      headers: await authHeaders('U-lee', 'Lee', 'G-other-group'),
+    });
+    expect(otherList.status).toBe(200);
+    expect(otherList.body.events.some((e) => e.name === '群組 A 活動')).toBe(false);
+
+    const sameList = await json<{ events: Array<{ name: string }> }>('/api/events', {
+      headers: await authHeaders('U-lee', 'Lee', 'G-test-group'),
+    });
+    expect(sameList.body.events.some((e) => e.name === '群組 A 活動')).toBe(true);
   });
 
   it('creates and lists upcoming events sorted by time', async () => {
@@ -47,7 +109,7 @@ describe('events API', () => {
     expect(first.body.event.endAt).toBeTruthy();
 
     const list = await json<{ events: Array<{ name: string }> }>('/api/events', {
-      headers: authHeaders('U-amy', 'Amy'),
+      headers: await authHeaders('U-amy', 'Amy'),
     });
     expect(list.status).toBe(200);
     const names = list.body.events.map((event) => event.name);
@@ -59,7 +121,7 @@ describe('events API', () => {
     const detail = await json<{
       event: { organizerLineUserId: string; viewer: { isOrganizer: boolean } };
     }>(`/api/events/${created.body.event.eventId}`, {
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
     });
     expect(detail.body.event.organizerLineUserId).toBe('U-lee');
     expect(detail.body.event.viewer.isOrganizer).toBe(true);
@@ -146,7 +208,7 @@ describe('events API', () => {
 
     const list = await json<{ events: Array<{ eventId: string; groupId: string; name: string }> }>(
       '/api/events',
-      { headers: authHeaders('U-lee', 'Lee') },
+      { headers: await authHeaders('U-lee', 'Lee') },
     );
     const found = list.body.events.find((event) => event.eventId === eventId);
     expect(found).toBeTruthy();
@@ -184,13 +246,13 @@ describe('events API', () => {
       .run();
 
     const list = await json<{ events: Array<{ name: string }> }>('/api/events', {
-      headers: authHeaders('U-amy', 'Amy'),
+      headers: await authHeaders('U-amy', 'Amy'),
     });
     expect(list.body.events.some((event) => event.name === '進行中活動')).toBe(true);
 
     const renamed = await json<{ event: { name: string } }>('/api/events/in-progress-event', {
       method: 'PATCH',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
       body: JSON.stringify({ name: '進行中活動（改名）' }),
     });
     expect(renamed.status).toBe(200);
@@ -203,7 +265,7 @@ describe('events API', () => {
       event: { startDate: string; startTime: string; endDate: string; endTime: string };
     }>(`/api/events/${created.body.event.eventId}`, {
       method: 'PATCH',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
       body: JSON.stringify({
         startDate: '2026-12-15',
         startTime: '18:00',
@@ -226,26 +288,26 @@ describe('organizer permissions', () => {
 
     const memberPatch = await json(`/api/events/${eventId}`, {
       method: 'PATCH',
-      headers: authHeaders('U-amy', 'Amy'),
+      headers: await authHeaders('U-amy', 'Amy'),
       body: JSON.stringify({ name: '被改名', confirmTimeLocationChange: true }),
     });
     expect(memberPatch.status).toBe(403);
 
     const memberClose = await json(`/api/events/${eventId}/close`, {
       method: 'POST',
-      headers: authHeaders('U-amy', 'Amy'),
+      headers: await authHeaders('U-amy', 'Amy'),
     });
     expect(memberClose.status).toBe(403);
 
     const memberDelete = await json(`/api/events/${eventId}`, {
       method: 'DELETE',
-      headers: authHeaders('U-amy', 'Amy'),
+      headers: await authHeaders('U-amy', 'Amy'),
     });
     expect(memberDelete.status).toBe(403);
 
     const memberTransfer = await json(`/api/events/${eventId}/transfer-invites`, {
       method: 'POST',
-      headers: authHeaders('U-amy', 'Amy'),
+      headers: await authHeaders('U-amy', 'Amy'),
     });
     expect(memberTransfer.status).toBe(403);
   });
@@ -256,7 +318,7 @@ describe('organizer permissions', () => {
 
     const patched = await json<{ event: { name: string; address: string } }>(`/api/events/${eventId}`, {
       method: 'PATCH',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
       body: JSON.stringify({
         name: '主揪管理（更新）',
         address: '台中市西區',
@@ -268,7 +330,7 @@ describe('organizer permissions', () => {
 
     const invite = await json<{ invite: { token: string } }>(`/api/events/${eventId}/transfer-invites`, {
       method: 'POST',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
     });
     expect(invite.status).toBe(201);
 
@@ -276,7 +338,7 @@ describe('organizer permissions', () => {
       `/api/transfer-invites/${invite.body.invite.token}/accept`,
       {
         method: 'POST',
-        headers: authHeaders('U-amy', 'Amy'),
+        headers: await authHeaders('U-amy', 'Amy'),
       },
     );
     expect(transferred.status).toBe(200);
@@ -284,19 +346,19 @@ describe('organizer permissions', () => {
 
     const closed = await json<{ event: { status: string } }>(`/api/events/${eventId}/close`, {
       method: 'POST',
-      headers: authHeaders('U-amy', 'Amy'),
+      headers: await authHeaders('U-amy', 'Amy'),
     });
     expect(closed.status).toBe(200);
     expect(closed.body.event.status).toBe('CLOSED');
 
     const deleted = await json(`/api/events/${eventId}`, {
       method: 'DELETE',
-      headers: authHeaders('U-amy', 'Amy'),
+      headers: await authHeaders('U-amy', 'Amy'),
     });
     expect(deleted.status).toBe(200);
 
     const missing = await json(`/api/events/${eventId}`, {
-      headers: authHeaders('U-amy', 'Amy'),
+      headers: await authHeaders('U-amy', 'Amy'),
     });
     expect(missing.status).toBe(404);
   });
@@ -305,7 +367,7 @@ describe('organizer permissions', () => {
     const created = await createEvent('U-lee', 'Lee', { name: '確認提示' });
     const result = await json(`/api/events/${created.body.event.eventId}`, {
       method: 'PATCH',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
       body: JSON.stringify({ address: '新地址' }),
     });
     expect(result.status).toBe(400);
@@ -316,16 +378,16 @@ describe('organizer permissions', () => {
     const eventId = created.body.event.eventId;
     await json(`/api/events/${eventId}/join`, {
       method: 'POST',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
     });
     await json(`/api/events/${eventId}/join`, {
       method: 'POST',
-      headers: authHeaders('U-amy', 'Amy'),
+      headers: await authHeaders('U-amy', 'Amy'),
     });
 
     const lowered = await json(`/api/events/${eventId}`, {
       method: 'PATCH',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
       body: JSON.stringify({ capacity: 1 }),
     });
     expect(lowered.status).toBe(400);
@@ -339,7 +401,7 @@ describe('registrations and waitlist', () => {
 
     const selfJoin = await json<{ registration: { type: string; displayLabel: string } }>(
       `/api/events/${eventId}/join`,
-      { method: 'POST', headers: authHeaders('U-lee', 'Lee') },
+      { method: 'POST', headers: await authHeaders('U-lee', 'Lee') },
     );
     expect(selfJoin.status).toBe(201);
     expect(selfJoin.body.registration.type).toBe('SELF');
@@ -347,7 +409,7 @@ describe('registrations and waitlist', () => {
 
     const duplicateSelf = await json(`/api/events/${eventId}/join`, {
       method: 'POST',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
     });
     expect(duplicateSelf.status).toBe(409);
 
@@ -355,7 +417,7 @@ describe('registrations and waitlist', () => {
       `/api/events/${eventId}/proxy-join`,
       {
         method: 'POST',
-        headers: authHeaders('U-lee', 'Lee'),
+        headers: await authHeaders('U-lee', 'Lee'),
         body: JSON.stringify({ participantName: 'Amy' }),
       },
     );
@@ -365,7 +427,7 @@ describe('registrations and waitlist', () => {
 
     const duplicateProxy = await json(`/api/events/${eventId}/proxy-join`, {
       method: 'POST',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
       body: JSON.stringify({ participantName: 'Amy' }),
     });
     expect(duplicateProxy.status).toBe(409);
@@ -381,13 +443,13 @@ describe('registrations and waitlist', () => {
 
     const first = await json<{ registration: { registrationId: string; status: string } }>(
       `/api/events/${eventId}/join`,
-      { method: 'POST', headers: authHeaders('U-lee', 'Lee') },
+      { method: 'POST', headers: await authHeaders('U-lee', 'Lee') },
     );
     expect(first.body.registration.status).toBe('CONFIRMED');
 
     const waitSelf = await json<{ registration: { status: string; waitlistPosition: number } }>(
       `/api/events/${eventId}/join`,
-      { method: 'POST', headers: authHeaders('U-amy', 'Amy') },
+      { method: 'POST', headers: await authHeaders('U-amy', 'Amy') },
     );
     expect(waitSelf.body.registration.status).toBe('WAITLIST');
     expect(waitSelf.body.registration.waitlistPosition).toBe(1);
@@ -396,7 +458,7 @@ describe('registrations and waitlist', () => {
       registration: { status: string; waitlistPosition: number; type: string };
     }>(`/api/events/${eventId}/proxy-join`, {
       method: 'POST',
-      headers: authHeaders('U-bob', 'Bob'),
+      headers: await authHeaders('U-bob', 'Bob'),
       body: JSON.stringify({ participantName: 'Cara' }),
     });
     expect(waitProxy.body.registration.status).toBe('WAITLIST');
@@ -404,7 +466,7 @@ describe('registrations and waitlist', () => {
 
     const cancelled = await json<{ promoted: boolean }>(
       `/api/registrations/${first.body.registration.registrationId}`,
-      { method: 'DELETE', headers: authHeaders('U-lee', 'Lee') },
+      { method: 'DELETE', headers: await authHeaders('U-lee', 'Lee') },
     );
     expect(cancelled.status).toBe(200);
     expect(cancelled.body.promoted).toBe(true);
@@ -417,7 +479,7 @@ describe('registrations and waitlist', () => {
           waitlist: Array<{ displayLabel: string; waitlistPosition: number }>;
         };
       };
-    }>(`/api/events/${eventId}`, { headers: authHeaders('U-org', '主揪') });
+    }>(`/api/events/${eventId}`, { headers: await authHeaders('U-org', '主揪') });
 
     expect(detail.body.event.confirmedCount).toBe(1);
     expect(detail.body.event.registrations.confirmed[0].displayLabel).toBe('Amy');
@@ -432,21 +494,21 @@ describe('registrations and waitlist', () => {
     const eventId = created.body.event.eventId;
     const confirmed = await json<{ registration: { registrationId: string } }>(
       `/api/events/${eventId}/join`,
-      { method: 'POST', headers: authHeaders('U-lee', 'Lee') },
+      { method: 'POST', headers: await authHeaders('U-lee', 'Lee') },
     );
     await json(`/api/events/${eventId}/proxy-join`, {
       method: 'POST',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
       body: JSON.stringify({ participantName: 'Amy' }),
     });
     await json(`/api/registrations/${confirmed.body.registration.registrationId}`, {
       method: 'DELETE',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
     });
 
     const detail = await json<{
       event: { registrations: { confirmed: Array<{ displayLabel: string; type: string }> } };
-    }>(`/api/events/${eventId}`, { headers: authHeaders('U-org', '主揪') });
+    }>(`/api/events/${eventId}`, { headers: await authHeaders('U-org', '主揪') });
     expect(detail.body.event.registrations.confirmed[0].type).toBe('PROXY');
     expect(detail.body.event.registrations.confirmed[0].displayLabel).toBe('Amy（Lee 代報）');
   });
@@ -456,32 +518,32 @@ describe('registrations and waitlist', () => {
     const eventId = created.body.event.eventId;
     const amy = await json<{ registration: { registrationId: string } }>(`/api/events/${eventId}/join`, {
       method: 'POST',
-      headers: authHeaders('U-amy', 'Amy'),
+      headers: await authHeaders('U-amy', 'Amy'),
     });
     const leeProxy = await json<{ registration: { registrationId: string } }>(
       `/api/events/${eventId}/proxy-join`,
       {
         method: 'POST',
-        headers: authHeaders('U-lee', 'Lee'),
+        headers: await authHeaders('U-lee', 'Lee'),
         body: JSON.stringify({ participantName: 'Amy' }),
       },
     );
 
     const blocked = await json(`/api/registrations/${amy.body.registration.registrationId}`, {
       method: 'DELETE',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
     });
     expect(blocked.status).toBe(403);
 
     const proxyCancel = await json(`/api/registrations/${leeProxy.body.registration.registrationId}`, {
       method: 'DELETE',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
     });
     expect(proxyCancel.status).toBe(200);
 
     const organizerCancel = await json(`/api/registrations/${amy.body.registration.registrationId}`, {
       method: 'DELETE',
-      headers: authHeaders('U-org', '主揪'),
+      headers: await authHeaders('U-org', '主揪'),
     });
     expect(organizerCancel.status).toBe(200);
   });
@@ -495,11 +557,11 @@ describe('registrations and waitlist', () => {
     const eventId = created.body.event.eventId;
     await json(`/api/events/${eventId}/join`, {
       method: 'POST',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
     });
     const full = await json(`/api/events/${eventId}/join`, {
       method: 'POST',
-      headers: authHeaders('U-amy', 'Amy'),
+      headers: await authHeaders('U-amy', 'Amy'),
     });
     expect(full.status).toBe(409);
   });
@@ -509,11 +571,11 @@ describe('registrations and waitlist', () => {
     const eventId = created.body.event.eventId;
     await json(`/api/events/${eventId}/close`, {
       method: 'POST',
-      headers: authHeaders('U-org', '主揪'),
+      headers: await authHeaders('U-org', '主揪'),
     });
     const join = await json(`/api/events/${eventId}/join`, {
       method: 'POST',
-      headers: authHeaders('U-amy', 'Amy'),
+      headers: await authHeaders('U-amy', 'Amy'),
     });
     expect(join.status).toBe(409);
   });
@@ -533,7 +595,7 @@ describe('organizer transfer invites', () => {
 
     const invite = await json<{ invite: { token: string; sharePath: string; expiresAt: string } }>(
       `/api/events/${eventId}/transfer-invites`,
-      { method: 'POST', headers: authHeaders('U-lee', 'Lee') },
+      { method: 'POST', headers: await authHeaders('U-lee', 'Lee') },
     );
     expect(invite.status).toBe(201);
     expect(invite.body.invite.token).toBeTruthy();
@@ -574,11 +636,11 @@ describe('organizer transfer invites', () => {
     const eventId = created.body.event.eventId;
     const first = await json<{ invite: { token: string } }>(`/api/events/${eventId}/transfer-invites`, {
       method: 'POST',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
     });
     const second = await json<{ invite: { token: string } }>(`/api/events/${eventId}/transfer-invites`, {
       method: 'POST',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
     });
     expect(first.body.invite.token).not.toBe(second.body.invite.token);
 
@@ -590,7 +652,7 @@ describe('organizer transfer invites', () => {
 
     await json(`/api/events/${eventId}/transfer-invites`, {
       method: 'DELETE',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
     });
     const cancelled = await json(`/api/transfer-invites/${second.body.invite.token}/accept`, {
       method: 'POST',
@@ -606,7 +668,7 @@ describe('organizer transfer invites', () => {
     const eventId = created.body.event.eventId;
     const invite = await json<{ invite: { token: string } }>(`/api/events/${eventId}/transfer-invites`, {
       method: 'POST',
-      headers: authHeaders('U-lee', 'Lee'),
+      headers: await authHeaders('U-lee', 'Lee'),
     });
     const tokenHash = await sha256Hex(invite.body.invite.token);
     await env.DB.prepare(
@@ -634,7 +696,7 @@ describe('copy event', () => {
     const eventId = created.body.event.eventId;
     await json(`/api/events/${eventId}/join`, {
       method: 'POST',
-      headers: authHeaders('U-amy', 'Amy'),
+      headers: await authHeaders('U-amy', 'Amy'),
     });
 
     const copied = await json<{
@@ -652,7 +714,7 @@ describe('copy event', () => {
       };
     }>(`/api/events/${eventId}/copy`, {
       method: 'POST',
-      headers: authHeaders('U-amy', 'Amy'),
+      headers: await authHeaders('U-amy', 'Amy'),
       body: JSON.stringify({
         ...futureRange(20),
         name: '原活動',
@@ -670,7 +732,7 @@ describe('copy event', () => {
 
     const original = await json<{
       event: { confirmedCount: number; organizerLineUserId: string };
-    }>(`/api/events/${eventId}`, { headers: authHeaders('U-lee', 'Lee') });
+    }>(`/api/events/${eventId}`, { headers: await authHeaders('U-lee', 'Lee') });
     expect(original.body.event.confirmedCount).toBe(1);
     expect(original.body.event.organizerLineUserId).toBe('U-lee');
   });
@@ -679,7 +741,7 @@ describe('copy event', () => {
     const created = await createEvent('U-lee', 'Lee', { name: '別群活動' });
     const copied = await json(`/api/events/${created.body.event.eventId}/copy`, {
       method: 'POST',
-      headers: authHeaders('U-amy', 'Amy', 'G-other'),
+      headers: await authHeaders('U-amy', 'Amy', 'G-other'),
       body: JSON.stringify(futureRange()),
     });
     expect(copied.status).toBe(403);
@@ -716,5 +778,129 @@ describe('LINE webhook', () => {
       body: payload,
     });
     expect(response.status).toBe(200);
+  });
+
+  it('embeds a signed context token in /list flex links from webhook groupId', async () => {
+    const { hmacSha256Base64 } = await import('../src/lib/line-signature');
+    const { verifyLiffContext } = await import('../src/lib/liff-context');
+    const { env } = await import('cloudflare:test');
+
+    await createEvent('U-lee', 'Lee', { name: 'Webhook 列表活動' });
+
+    const replies: Array<{ messages: Array<{ contents?: unknown }> }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('api.line.me/v2/bot/message/reply')) {
+        replies.push(JSON.parse(String(init?.body)) as { messages: Array<{ contents?: unknown }> });
+        return new Response('{}', { status: 200 });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const payload = JSON.stringify({
+        events: [
+          {
+            type: 'message',
+            webhookEventId: `wh-list-${crypto.randomUUID()}`,
+            replyToken: 'reply-list-token',
+            message: { type: 'text', text: '/list' },
+            source: { type: 'group', groupId: 'G-test-group' },
+          },
+        ],
+      });
+      const signature = await hmacSha256Base64(
+        'test-channel-secret',
+        new TextEncoder().encode(payload),
+      );
+      const response = await request('/webhook/line', {
+        method: 'POST',
+        headers: { 'X-Line-Signature': signature, 'Content-Type': 'application/json' },
+        body: payload,
+      });
+      expect(response.status).toBe(200);
+      expect(replies.length).toBe(1);
+      const serialized = JSON.stringify(replies[0]);
+      expect(serialized).toContain('context=');
+      expect(serialized).toContain('liff.line.me/test-liff-id');
+
+      const match = serialized.match(/context=([^"&\\]+)/);
+      expect(match?.[1]).toBeTruthy();
+      const token = decodeURIComponent(match![1]);
+      const verified = await verifyLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, token);
+      expect(verified.groupId).toBe('G-test-group');
+      expect(verified.nonce.length).toBeGreaterThan(0);
+
+      const list = await json<{ events: Array<{ name: string }> }>('/api/events', {
+        headers: {
+          Authorization: 'Bearer test:U-lee:Lee',
+          'Content-Type': 'application/json',
+          'X-JoyIn-Context': token,
+        },
+      });
+      expect(list.status).toBe(200);
+      expect(list.body.events.some((e) => e.name === 'Webhook 列表活動')).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('limits /list results to five upcoming events sorted by start_at ASC', async () => {
+    const { hmacSha256Base64 } = await import('../src/lib/line-signature');
+    const names = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6'];
+    for (let i = 0; i < names.length; i += 1) {
+      await createEvent('U-lee', 'Lee', {
+        name: names[i],
+        startDate: `2026-12-${String(10 + i).padStart(2, '0')}`,
+        startTime: '19:00',
+        endDate: `2026-12-${String(10 + i).padStart(2, '0')}`,
+        endTime: '21:00',
+      });
+    }
+
+    const replies: Array<{ messages: unknown[] }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('api.line.me/v2/bot/message/reply')) {
+        replies.push(JSON.parse(String(init?.body)) as { messages: unknown[] });
+        return new Response('{}', { status: 200 });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const payload = JSON.stringify({
+        events: [
+          {
+            type: 'message',
+            webhookEventId: `wh-limit-${crypto.randomUUID()}`,
+            replyToken: 'reply-limit-token',
+            message: { type: 'text', text: '/list' },
+            source: { type: 'group', groupId: 'G-test-group' },
+          },
+        ],
+      });
+      const signature = await hmacSha256Base64(
+        'test-channel-secret',
+        new TextEncoder().encode(payload),
+      );
+      const response = await request('/webhook/line', {
+        method: 'POST',
+        headers: { 'X-Line-Signature': signature, 'Content-Type': 'application/json' },
+        body: payload,
+      });
+      expect(response.status).toBe(200);
+      const serialized = JSON.stringify(replies[0]);
+      expect(serialized).toContain('L1');
+      expect(serialized).toContain('L5');
+      expect(serialized).not.toContain('"L6"');
+      const idx1 = serialized.indexOf('L1');
+      const idx5 = serialized.indexOf('L5');
+      expect(idx1).toBeGreaterThan(-1);
+      expect(idx5).toBeGreaterThan(idx1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

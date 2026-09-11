@@ -1,31 +1,43 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { EventSummary } from '../../../shared/types';
 import { api } from '../api';
 import { EventCard } from '../components/EventCard';
 import { StateBlock } from '../components/StateBlock';
 import { SiteNav } from '../components/SiteNav';
-import { closeLiff } from '../liff';
 import type { LiffSession } from '../liff';
 
 export function EventListPage({ session }: { session: LiffSession }) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const showDiag = searchParams.get('diag') === '1';
   const [events, setEvents] = useState<EventSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [order, setOrder] = useState<'asc' | 'desc'>('asc');
+  const [listStatus, setListStatus] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError('');
+    setListStatus(null);
     api
       .listEvents(session)
       .then((result) => {
-        if (!cancelled) setEvents(result.events);
+        if (!cancelled) {
+          setEvents(result.events);
+          setListStatus(200);
+        }
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err.message);
+        if (!cancelled) {
+          setError(err.message);
+          setListStatus(
+            'status' in err && typeof (err as { status?: number }).status === 'number'
+              ? (err as { status: number }).status
+              : null,
+          );
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -35,35 +47,32 @@ export function EventListPage({ session }: { session: LiffSession }) {
     };
   }, [session]);
 
-  const sorted = useMemo(() => {
-    const copy = [...events];
-    copy.sort((a, b) =>
-      order === 'asc' ? a.startAt.localeCompare(b.startAt) : b.startAt.localeCompare(a.startAt),
-    );
-    return copy;
-  }, [events, order]);
+  const sorted = useMemo(
+    () => [...events].sort((a, b) => a.startAt.localeCompare(b.startAt)),
+    [events],
+  );
 
   return (
     <div className="stack">
       <SiteNav current="events" />
-      <div className="topbar">
-        <div className="brand">
-          <span>嗨 {session.displayName}，來看看群組活動</span>
-        </div>
-        <button className="btn ghost" type="button" onClick={() => closeLiff()}>
-          返回 LINE
-        </button>
-      </div>
+      <p className="list-greeting">嗨 {session.displayName}，來看看群組活動</p>
+      {showDiag ? (
+        <section className="panel" aria-label="群組診斷">
+          <strong>群組診斷（僅 ?diag=1）</strong>
+          <pre className="share-box" style={{ whiteSpace: 'pre-wrap', marginTop: 8 }}>
+            {[
+              `has context token: ${String(session.contextDiag?.hasContextToken ?? false)}`,
+              `context token length: ${session.contextDiag?.contextTokenLength ?? 0}`,
+              `GET /api/events status: ${listStatus ?? '(pending)'}`,
+              `GET /api/events count: ${loading ? '(loading)' : sorted.length}`,
+              `page loadedAt: ${session.contextDiag?.loadedAt ?? '(n/a)'}`,
+            ].join('\n')}
+          </pre>
+        </section>
+      ) : null}
       <div className="row">
         <button className="btn" type="button" onClick={() => navigate('/events/new')}>
           新增活動
-        </button>
-        <button
-          className="btn secondary"
-          type="button"
-          onClick={() => setOrder((value) => (value === 'asc' ? 'desc' : 'asc'))}
-        >
-          {order === 'asc' ? '時間：由近到遠' : '時間：由遠到近'}
         </button>
       </div>
       {loading ? <StateBlock kind="loading" title="活動載入中…" /> : null}
@@ -71,7 +80,10 @@ export function EventListPage({ session }: { session: LiffSession }) {
       {!loading && !error && sorted.length === 0 ? (
         <StateBlock kind="empty" title="目前沒有尚未結束的活動">
           任何群組成員都可以建立第一場活動。
-          <div className="row" style={{ marginTop: 12, justifyContent: 'center' }}>
+          <div className="row empty-actions">
+            <button className="btn" type="button" onClick={() => navigate('/events/new')}>
+              新增活動
+            </button>
             <button className="btn secondary" type="button" onClick={() => navigate('/help')}>
               查看操作說明
             </button>

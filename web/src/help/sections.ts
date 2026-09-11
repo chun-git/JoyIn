@@ -54,8 +54,8 @@ export const HELP_SECTIONS: HelpSection[] = [
       '實際報名仍需從 LINE 群組開啟，系統才能知道你屬於哪個群組。',
     ],
     actions: [
+      { label: '新增活動', to: '/events/new', primary: true },
       { label: '查看參加者操作', to: '/help/join' },
-      { label: '開始新增活動', to: '/events/new', primary: true },
     ],
   },
   {
@@ -130,7 +130,7 @@ export const HELP_SECTIONS: HelpSection[] = [
       },
     ],
     actions: [
-      { label: '開始新增活動', to: '/events/new', primary: true },
+      { label: '新增活動', to: '/events/new', primary: true },
       { label: '複製活動', to: '/help/copy' },
       { label: '轉移主揪', to: '/help/transfer' },
     ],

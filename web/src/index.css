@@ -293,22 +293,11 @@ button.event-card {
 h1 { margin: 0 0 8px; font-size: 26px; }
 section h2 { margin: 0 0 10px; font-size: 18px; }
 
-.help-q {
-  width: 32px;
-  height: 32px;
-  min-width: 32px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  display: grid;
-  place-items: center;
-  background: white;
-  font-weight: 700;
-  color: var(--teal-dark);
-  flex: 0 0 auto;
-}
-.help-q[aria-current='page'],
-.site-nav-links a[aria-current='page'] {
-  color: var(--teal);
+.list-greeting {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  overflow-wrap: anywhere;
 }
 
 .site-nav {
@@ -317,6 +306,7 @@ section h2 { margin: 0 0 10px; font-size: 18px; }
   align-items: center;
   justify-content: space-between;
   gap: 8px 12px;
+  width: 100%;
   margin-bottom: 8px;
   min-width: 0;
 }
@@ -331,13 +321,53 @@ section h2 { margin: 0 0 10px; font-size: 18px; }
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  font-size: 14px;
-  font-weight: 700;
+  gap: 8px;
   min-width: 0;
 }
-.site-nav-links a {
+.site-nav-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: white;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+  white-space: normal;
   overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.site-nav-pill:hover {
+  background: var(--bg-accent);
+  border-color: var(--teal);
+  color: var(--teal-dark);
+}
+.site-nav-pill:focus,
+.site-nav-pill:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+.site-nav-pill:active {
+  background: #d9efe6;
+  border-color: var(--teal-dark);
+  color: var(--teal-dark);
+}
+.site-nav-pill[aria-current='page'] {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: white;
+}
+.site-nav-pill[aria-current='page']:hover,
+.site-nav-pill[aria-current='page']:active {
+  background: var(--teal-dark);
+  border-color: var(--teal-dark);
+  color: white;
 }
 
 .skip-link {
@@ -514,6 +544,14 @@ section h2 { margin: 0 0 10px; font-size: 18px; }
 }
 .form-actions {
   margin-top: 16px;
+}
+.empty-actions {
+  margin-top: 12px;
+  justify-content: center;
+}
+.empty-actions .btn,
+.help-actions .btn {
+  flex: 0 1 auto;
 }
 
 @media (min-width: 640px) {

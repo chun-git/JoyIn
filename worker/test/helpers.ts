@@ -1,13 +1,19 @@
 import { env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import worker from '../src/index';
+import { signLiffContext } from '../src/lib/liff-context';
 
 export const GROUP_ID = 'G-test-group';
 
-export function authHeaders(userId: string, displayName: string, groupId = GROUP_ID): HeadersInit {
+export async function authHeaders(
+  userId: string,
+  displayName: string,
+  groupId = GROUP_ID,
+): Promise<HeadersInit> {
+  const context = await signLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, groupId);
   return {
     Authorization: `Bearer test:${userId}:${encodeURIComponent(displayName)}`,
     'Content-Type': 'application/json',
-    'X-Line-Group-Id': groupId,
+    'X-JoyIn-Context': context,
   };
 }
 
@@ -61,7 +67,7 @@ export async function createEvent(
   };
   return json<{ event: { eventId: string } & Record<string, unknown> }>('/api/events', {
     method: 'POST',
-    headers: authHeaders(userId, displayName),
+    headers: await authHeaders(userId, displayName),
     body: JSON.stringify(payload),
   });
 }

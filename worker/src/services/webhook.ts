@@ -1,6 +1,7 @@
 import type { Bindings } from '../env';
 import { verifyLineSignature } from '../lib/line-signature';
 import { buildEventCarousel } from '../lib/line-flex';
+import { buildLiffUrlWithContext, signLiffContext } from '../lib/liff-context';
 import { nowIso } from '../lib/datetime';
 import { insertWebhookEvent } from '../db/repo';
 import { listEvents } from './events';
@@ -88,8 +89,17 @@ export async function handleLineWebhook(
       continue;
     }
 
-    const upcoming = await listEvents(env.DB, event.source.groupId, 5);
-    const liffUrl = env.LIFF_URL || `https://liff.line.me/${env.LIFF_ID}`;
+    const groupId = event.source.groupId;
+    if (!env.LIFF_CONTEXT_SIGNING_SECRET) {
+      console.error('LIFF_CONTEXT_SIGNING_SECRET is not configured; cannot reply to /list');
+      continue;
+    }
+
+    // Official group key = webhook source.groupId only
+    const upcoming = await listEvents(env.DB, groupId, 5);
+    const contextToken = await signLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, groupId);
+    const baseUrl = env.LIFF_URL || `https://liff.line.me/${env.LIFF_ID}`;
+    const liffUrl = buildLiffUrlWithContext(baseUrl, contextToken);
     const flex = buildEventCarousel(upcoming, liffUrl);
     await replyMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, flex);
   }

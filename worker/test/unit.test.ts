@@ -108,3 +108,25 @@ describe('flex carousel', () => {
     expect(JSON.stringify(filled)).toContain('https://liff.line.me/test');
   });
 });
+
+describe('LIFF context token', () => {
+  it('signs and verifies groupId, expiry, and nonce', async () => {
+    const { signLiffContext, verifyLiffContext } = await import('../src/lib/liff-context');
+    const token = await signLiffContext('unit-secret', 'Cgroup123');
+    const verified = await verifyLiffContext('unit-secret', token);
+    expect(verified.groupId).toBe('Cgroup123');
+    expect(verified.nonce.length).toBeGreaterThan(8);
+    expect(verified.expiresAt).toBeGreaterThan(Date.now());
+  });
+
+  it('rejects tampered tokens and wrong secrets', async () => {
+    const { signLiffContext, verifyLiffContext, buildLiffUrlWithContext } = await import(
+      '../src/lib/liff-context'
+    );
+    const token = await signLiffContext('unit-secret', 'Cgroup123');
+    await expect(verifyLiffContext('other-secret', token)).rejects.toThrow();
+    const [body, sig] = token.split('.');
+    await expect(verifyLiffContext('unit-secret', `${body}.${sig}x`)).rejects.toThrow();
+    expect(buildLiffUrlWithContext('https://liff.line.me/abc', 'tok.en')).toContain('context=tok.en');
+  });
+});

@@ -6,7 +6,6 @@ import App from './App';
 
 vi.mock('./liff', () => ({
   initSession: vi.fn(() => new Promise(() => undefined)),
-  closeLiff: vi.fn(),
 }));
 
 function renderHelp(path: string) {
@@ -26,6 +25,15 @@ describe('HelpPage', () => {
     expect(screen.getByRole('heading', { name: '將 JoyIn 加入 LINE 群組' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '在群組輸入 /list' })).toBeInTheDocument();
     expect(initSession).not.toHaveBeenCalled();
+    const create = screen.getByRole('link', { name: '新增活動' });
+    expect(create).toHaveAttribute('href', '/events/new');
+    const actions = create.closest('.help-actions');
+    expect(actions?.textContent).toMatch(/新增活動.*查看參加者操作/);
+  });
+
+  it('keeps create action first on /help/start', async () => {
+    renderHelp('/help/start');
+    expect(await screen.findByRole('link', { name: '新增活動' })).toHaveAttribute('href', '/events/new');
   });
 
   it('navigates chapters from the table of contents', async () => {
@@ -67,6 +75,10 @@ describe('HelpPage', () => {
     expect(screen.getByRole('navigation', { name: '主要' })).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: '使用手冊章節' })).toBeInTheDocument();
     expect(screen.getByRole('main')).toBeInTheDocument();
+    const siteNav = screen.getByRole('navigation', { name: '主要' });
+    expect(within(siteNav).getByRole('link', { name: '使用手冊' })).toHaveAttribute('aria-current', 'page');
+    expect(within(siteNav).getByRole('link', { name: '活動' })).not.toHaveAttribute('aria-current');
+    expect(screen.queryByRole('button', { name: '返回 LINE' })).not.toBeInTheDocument();
     const toc = screen.getByRole('navigation', { name: '使用手冊章節' });
     expect(within(toc).getByRole('link', { name: '參加者操作' })).toHaveAttribute('aria-current', 'page');
   });

@@ -11,7 +11,7 @@ app.use(
   '/api/*',
   cors({
     origin: (origin) => origin || '*',
-    allowHeaders: ['Content-Type', 'Authorization', 'X-Line-Group-Id'],
+    allowHeaders: ['Content-Type', 'Authorization', 'X-JoyIn-Context'],
     allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     maxAge: 86400,
   }),

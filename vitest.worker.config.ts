@@ -20,6 +20,7 @@ export default defineWorkersConfig(async () => {
               LINE_CHANNEL_ID: 'test-channel-id',
               LIFF_ID: 'test-liff-id',
               LIFF_URL: 'https://liff.line.me/test-liff-id',
+              LIFF_CONTEXT_SIGNING_SECRET: 'test-liff-context-signing-secret',
               APP_TIMEZONE: 'Asia/Taipei',
               TEST_MIGRATIONS: migrations,
             },
