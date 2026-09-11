@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { hmacSha256Base64, verifyLineSignature } from '../src/lib/line-signature';
-import { isExpired, isRangeInvalid, toEventAt } from '../src/lib/datetime';
+import { isExpired, isRangeInvalid, toEventAt, validateEventSchedule } from '../src/lib/datetime';
 import { displayLabel, timingSafeEqual } from '../src/lib/ids';
 import { buildEventCarousel } from '../src/lib/line-flex';
 import type { EventSummary } from '../../shared/types';
@@ -16,6 +16,35 @@ describe('datetime', () => {
     expect(isRangeInvalid('2026-12-01T11:00:00.000Z', '2026-12-01T13:00:00.000Z')).toBe(false);
     expect(isRangeInvalid('2026-12-01T13:00:00.000Z', '2026-12-01T11:00:00.000Z')).toBe(true);
     expect(isRangeInvalid('2026-12-01T11:00:00.000Z', '2026-12-01T11:00:00.000Z')).toBe(true);
+  });
+
+  it('validates Taipei evening and overnight events against full datetimes', () => {
+    const now = new Date('2026-09-11T07:00:00.000Z');
+    expect(toEventAt('2026-09-11', '19:00')).toBe('2026-09-11T11:00:00.000Z');
+    expect(
+      validateEventSchedule(
+        { startDate: '2026-09-11', startTime: '19:00', endDate: '2026-09-11', endTime: '21:00' },
+        { now },
+      ).ok,
+    ).toBe(true);
+    expect(
+      validateEventSchedule(
+        { startDate: '2026-09-11', startTime: '23:00', endDate: '2026-09-12', endTime: '01:00' },
+        { now },
+      ).ok,
+    ).toBe(true);
+    expect(
+      validateEventSchedule(
+        { startDate: '2026-09-12', startTime: '09:00', endDate: '2026-09-12', endTime: '11:00' },
+        { now },
+      ).ok,
+    ).toBe(true);
+
+    const startedButNotEnded = validateEventSchedule(
+      { startDate: '2026-09-11', startTime: '19:00', endDate: '2026-09-11', endTime: '21:00' },
+      { now: new Date('2026-09-11T12:30:00.000Z') },
+    );
+    expect(startedButNotEnded).toEqual({ ok: false, message: '開始時間必須晚於現在' });
   });
 });
 

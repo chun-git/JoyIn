@@ -74,6 +74,31 @@ describe('events API', () => {
       endTime: '12:00',
     });
     expect(result.status).toBe(400);
+    expect((result.body as { message?: string }).message).toBe('開始時間必須晚於現在');
+  });
+
+  it('accepts Taipei evening and overnight ranges', async () => {
+    const evening = await createEvent('U-lee', 'Lee', {
+      name: '今晚桌遊',
+      startDate: '2026-12-01',
+      startTime: '19:00',
+      endDate: '2026-12-01',
+      endTime: '21:00',
+    });
+    expect(evening.status).toBe(201);
+    expect(evening.body.event.startAt).toBe('2026-12-01T11:00:00.000Z');
+    expect(evening.body.event.endAt).toBe('2026-12-01T13:00:00.000Z');
+
+    const overnight = await createEvent('U-lee', 'Lee', {
+      name: '跨日活動',
+      startDate: '2026-12-01',
+      startTime: '23:00',
+      endDate: '2026-12-02',
+      endTime: '01:00',
+    });
+    expect(overnight.status).toBe(201);
+    expect(overnight.body.event.startAt).toBe('2026-12-01T15:00:00.000Z');
+    expect(overnight.body.event.endAt).toBe('2026-12-01T17:00:00.000Z');
   });
 
   it('rejects when end_at is not after start_at', async () => {
@@ -130,18 +155,46 @@ describe('events API', () => {
   });
 
   it('keeps already-started events in the list until they end', async () => {
-    const created = await createEvent('U-lee', 'Lee', {
-      name: '進行中活動',
-      startDate: '2026-01-01',
-      startTime: '10:00',
-      endDate: '2026-12-31',
-      endTime: '23:00',
-    });
-    expect(created.status).toBe(201);
+    const { env } = await import('cloudflare:test');
+    const now = '2026-09-11T07:00:00.000Z';
+    await env.DB.prepare(
+      `INSERT INTO events (
+        event_id, group_id, name, event_date, event_time, event_at, start_at, end_at, address,
+        capacity, waitlist_enabled, status, organizer_line_user_id,
+        organizer_display_name, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)`,
+    )
+      .bind(
+        'in-progress-event',
+        'G-test-group',
+        '進行中活動',
+        '2026-09-11',
+        '10:00',
+        '2026-09-11T02:00:00.000Z',
+        '2026-09-11T02:00:00.000Z',
+        '2026-12-31T15:00:00.000Z',
+        '台北',
+        2,
+        1,
+        'U-lee',
+        'Lee',
+        now,
+        now,
+      )
+      .run();
+
     const list = await json<{ events: Array<{ name: string }> }>('/api/events', {
       headers: authHeaders('U-amy', 'Amy'),
     });
     expect(list.body.events.some((event) => event.name === '進行中活動')).toBe(true);
+
+    const renamed = await json<{ event: { name: string } }>('/api/events/in-progress-event', {
+      method: 'PATCH',
+      headers: authHeaders('U-lee', 'Lee'),
+      body: JSON.stringify({ name: '進行中活動（改名）' }),
+    });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.event.name).toBe('進行中活動（改名）');
   });
 
   it('lets the organizer update the time range', async () => {

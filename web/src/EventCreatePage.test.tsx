@@ -58,7 +58,7 @@ describe('EventCreatePage copy flow', () => {
     expect(getEvent).toHaveBeenCalledWith(session, 'e1');
 
     await user.type(screen.getByLabelText('開始日期'), '2026-12-20');
-    await user.type(screen.getByLabelText('結束日期'), '2026-12-20');
+    expect(screen.getByLabelText('結束日期')).toHaveValue('2026-12-20');
     await user.click(screen.getByRole('button', { name: '建立複製活動' }));
 
     await waitFor(() => {

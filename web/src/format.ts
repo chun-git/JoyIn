@@ -1,16 +1,33 @@
 import type { EventSummary } from '../../shared/types';
+import { APP_TIME_ZONE, toEventAt } from '../../shared/datetime';
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
 
 export function formatEventDateTime(eventDate: string, eventTime: string): string {
-  const date = new Date(`${eventDate}T${eventTime}:00+08:00`);
-  if (Number.isNaN(date.getTime())) {
+  try {
+    const date = new Date(toEventAt(eventDate, eventTime));
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: APP_TIME_ZONE,
+      weekday: 'short',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+    }).formatToParts(date);
+    const get = (type: string) => parts.find((part) => part.type === type)?.value || '';
+    const weekdayMap: Record<string, string> = {
+      Sun: '日',
+      Mon: '一',
+      Tue: '二',
+      Wed: '三',
+      Thu: '四',
+      Fri: '五',
+      Sat: '六',
+    };
+    const weekday = weekdayMap[get('weekday')] ?? WEEKDAYS[date.getUTCDay()];
+    return `${get('year')}年${get('month')}月${get('day')}日（${weekday}）${eventTime}`;
+  } catch {
     return `${eventDate} ${eventTime}`;
   }
-  const weekday = WEEKDAYS[date.getDay()];
-  const month = date.getMonth() + 1;
-  const day = date.getDate();
-  return `${date.getFullYear()}年${month}月${day}日（${weekday}）${eventTime}`;
 }
 
 export function formatEventRange(

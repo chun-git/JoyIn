@@ -1,13 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { CreateEventInput } from '../../../shared/types';
+import { addOneMinute, taipeiParts, validateEventSchedule } from '@shared/datetime';
 import { InlineHint } from './InlineHint';
-
-function rangeInvalid(startDate: string, startTime: string, endDate: string, endTime: string): boolean {
-  const start = new Date(`${startDate}T${startTime}:00+08:00`).getTime();
-  const end = new Date(`${endDate}T${endTime}:00+08:00`).getTime();
-  return Number.isNaN(start) || Number.isNaN(end) || end <= start;
-}
 
 export function EventForm({
   initial,
@@ -25,11 +20,14 @@ export function EventForm({
   const [startTime, setStartTime] = useState(initial?.startTime ?? '19:00');
   const [endDate, setEndDate] = useState(initial?.endDate ?? '');
   const [endTime, setEndTime] = useState(initial?.endTime ?? '21:00');
+  const [endDateTouched, setEndDateTouched] = useState(Boolean(initial?.endDate));
   const [address, setAddress] = useState(initial?.address ?? '');
   const [capacity, setCapacity] = useState(String(initial?.capacity ?? 10));
   const [waitlistEnabled, setWaitlistEnabled] = useState(initial?.waitlistEnabled ?? true);
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
+  const today = taipeiParts().date;
+  const nowTime = taipeiParts().time;
 
   useEffect(() => {
     setName(initial?.name ?? '');
@@ -37,10 +35,20 @@ export function EventForm({
     setStartTime(initial?.startTime ?? '19:00');
     setEndDate(initial?.endDate ?? '');
     setEndTime(initial?.endTime ?? '21:00');
+    setEndDateTouched(Boolean(initial?.endDate));
     setAddress(initial?.address ?? '');
     setCapacity(String(initial?.capacity ?? 10));
     setWaitlistEnabled(initial?.waitlistEnabled ?? true);
   }, [initial]);
+
+  function handleStartDateChange(value: string) {
+    setStartDate(value);
+    setEndDate((current) => {
+      if (!value) return current;
+      if (!endDateTouched || !current || current < value) return value;
+      return current;
+    });
+  }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -49,9 +57,15 @@ export function EventForm({
     if (!name.trim()) return setError('請填寫活動名稱');
     if (!startDate || !startTime) return setError('請選擇開始時間');
     if (!endDate || !endTime) return setError('請選擇結束時間');
-    if (rangeInvalid(startDate, startTime, endDate, endTime)) {
-      return setError('結束時間必須晚於開始時間');
-    }
+
+    const isEdit = Boolean(initial?.startDate && initial?.endDate);
+    const startChanged =
+      !isEdit || nextStartChanged(initial, startDate, startTime);
+    const schedule = validateEventSchedule(
+      { startDate, startTime, endDate, endTime },
+      { requireStartInFuture: startChanged },
+    );
+    if (!schedule.ok) return setError(schedule.message);
     if (!address.trim()) return setError('請填寫活動地址');
     if (!Number.isInteger(parsedCapacity) || parsedCapacity < 1) {
       return setError('人數上限需為大於 0 的整數');
@@ -68,7 +82,6 @@ export function EventForm({
       waitlistEnabled,
     };
 
-    const isEdit = Boolean(initial?.startDate && initial?.endDate);
     const timeOrPlaceChanged =
       isEdit &&
       (next.startDate !== initial?.startDate ||
@@ -91,51 +104,99 @@ export function EventForm({
     }
   }
 
+  const startDateMin = initial?.startDate && initial.startDate < today ? initial.startDate : today;
+  const nextStartMin = startDate === today ? addOneMinute(nowTime) : null;
+  const startUnchanged =
+    Boolean(initial?.startDate && initial?.startTime) &&
+    startDate === initial?.startDate &&
+    startTime === initial?.startTime;
+  const startTimeMin =
+    nextStartMin && !startUnchanged && startTime >= nextStartMin ? nextStartMin : undefined;
+  const endDateMin = startDate || today;
+  const endTimeCandidate =
+    startDate && endDate && startDate === endDate ? addOneMinute(startTime) : null;
+  const endTimeMin =
+    endTimeCandidate && endTime >= endTimeCandidate ? endTimeCandidate : undefined;
+
   return (
-    <form className="panel" onSubmit={handleSubmit}>
-      <label className="field">
+    <form className="panel event-form" aria-label="活動表單" onSubmit={handleSubmit}>
+      <label className="field" htmlFor="event-name">
         <span>活動名稱</span>
-        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={50} required />
+        <input
+          id="event-name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={50}
+          required
+        />
       </label>
       {timeHint ? <p className="hint">{timeHint}</p> : null}
       <InlineHint question="如何設定開始與結束時間？">
-        開始、結束都要填日期與時間。結束時間必須晚於開始時間。活動列表依開始時間由近到遠排列。
+        開始時間必須晚於現在，結束時間必須晚於開始時間。日期與時間都依台灣時間（Asia/Taipei）計算。
       </InlineHint>
       <div className="field-grid two">
-        <label className="field">
+        <label className="field" htmlFor="event-start-date">
           <span>開始日期</span>
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
+          <input
+            id="event-start-date"
+            type="date"
+            min={startDateMin}
+            value={startDate}
+            onChange={(e) => handleStartDateChange(e.target.value)}
+            required
+          />
         </label>
-        <label className="field">
+        <label className="field" htmlFor="event-start-time">
           <span>開始時間</span>
           <input
+            id="event-start-time"
             type="time"
+            min={startTimeMin}
             value={startTime}
             onChange={(e) => setStartTime(e.target.value.slice(0, 5))}
             required
           />
         </label>
-        <label className="field">
+        <label className="field" htmlFor="event-end-date">
           <span>結束日期</span>
-          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} required />
+          <input
+            id="event-end-date"
+            type="date"
+            min={endDateMin}
+            value={endDate}
+            onChange={(e) => {
+              setEndDateTouched(true);
+              setEndDate(e.target.value);
+            }}
+            required
+          />
         </label>
-        <label className="field">
+        <label className="field" htmlFor="event-end-time">
           <span>結束時間</span>
           <input
+            id="event-end-time"
             type="time"
+            min={endTimeMin}
             value={endTime}
             onChange={(e) => setEndTime(e.target.value.slice(0, 5))}
             required
           />
         </label>
       </div>
-      <label className="field">
+      <label className="field" htmlFor="event-address">
         <span>活動地址</span>
-        <input value={address} onChange={(e) => setAddress(e.target.value)} maxLength={120} required />
+        <input
+          id="event-address"
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+          maxLength={120}
+          required
+        />
       </label>
-      <label className="field">
+      <label className="field" htmlFor="event-capacity">
         <span>正式報名人數上限</span>
         <input
+          id="event-capacity"
           type="number"
           min={1}
           max={500}
@@ -156,11 +217,19 @@ export function EventForm({
         當正式報名額滿後，後續報名者會依序進入候補。有人取消時，系統會自動將最早加入候補的人遞補。
       </InlineHint>
       {error ? <p className="error">{error}</p> : null}
-      <div className="row" style={{ marginTop: 16 }}>
+      <div className="row form-actions">
         <button className="btn" type="submit" disabled={pending}>
           {pending ? '送出中…' : submitLabel}
         </button>
       </div>
     </form>
   );
+}
+
+function nextStartChanged(
+  initial: Partial<CreateEventInput> | undefined,
+  startDate: string,
+  startTime: string,
+): boolean {
+  return startDate !== initial?.startDate || startTime !== initial?.startTime;
 }

@@ -6,7 +6,7 @@ import type {
   UpdateEventInput,
 } from '../../../shared/types';
 import { Errors } from '../lib/errors';
-import { isExpired, isRangeInvalid, nowIso } from '../lib/datetime';
+import { isExpired, nowIso, validateEventSchedule } from '../lib/datetime';
 import { newId, toRegistrationRecord } from '../lib/ids';
 import {
   getEventRow,
@@ -18,7 +18,6 @@ import {
   updateEventRow,
 } from '../db/repo';
 import type { AuthUser } from '../env';
-import { eventAtFromParts } from '../lib/http';
 
 function endAtOf(row: { end_at: string | null; event_at: string }): string {
   return row.end_at || row.event_at;
@@ -84,21 +83,22 @@ export async function getEventDetail(
   };
 }
 
-function resolveRange(input: {
-  startDate: string;
-  startTime: string;
-  endDate: string;
-  endTime: string;
-}) {
-  const startAt = eventAtFromParts(input.startDate, input.startTime, '開始時間');
-  const endAt = eventAtFromParts(input.endDate, input.endTime, '結束時間');
-  if (isRangeInvalid(startAt, endAt)) {
-    throw Errors.validation('結束時間必須晚於開始時間');
+function resolveRange(
+  input: {
+    startDate: string;
+    startTime: string;
+    endDate: string;
+    endTime: string;
+  },
+  options: { requireStartInFuture: boolean },
+) {
+  const result = validateEventSchedule(input, {
+    requireStartInFuture: options.requireStartInFuture,
+  });
+  if (!result.ok) {
+    throw Errors.validation(result.message);
   }
-  if (isExpired(endAt)) {
-    throw Errors.validation('結束時間不可早於現在');
-  }
-  return { startAt, endAt };
+  return { startAt: result.startAt, endAt: result.endAt };
 }
 
 export async function createEvent(
@@ -107,7 +107,7 @@ export async function createEvent(
   user: AuthUser,
   input: CreateEventInput,
 ): Promise<EventSummary> {
-  const { startAt, endAt } = resolveRange(input);
+  const { startAt, endAt } = resolveRange(input, { requireStartInFuture: true });
   const createdAt = nowIso();
   const eventId = newId();
   await insertEvent(db, {
@@ -161,7 +161,11 @@ export async function updateEvent(
     capacity: input.capacity ?? row.capacity,
     waitlistEnabled: input.waitlistEnabled ?? Boolean(row.waitlist_enabled),
   };
-  const { startAt, endAt } = resolveRange(next);
+  const preview = resolveRange(next, { requireStartInFuture: false });
+  const startChanged = preview.startAt !== startAtOf(row);
+  const { startAt, endAt } = startChanged
+    ? resolveRange(next, { requireStartInFuture: true })
+    : preview;
 
   const timeOrLocationChanged =
     startAt !== startAtOf(row) || endAt !== endAtOf(row) || next.address !== row.address;

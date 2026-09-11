@@ -14,6 +14,9 @@ describe('format helpers', () => {
       }),
     ).toContain('21:00');
     expect(
+      formatEventDateTime('2026-09-12', '00:30'),
+    ).toContain('2026年9月12日');
+    expect(
       formatEventRange({
         startDate: '2026-12-01',
         startTime: '19:00',

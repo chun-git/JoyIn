@@ -1,7 +1,7 @@
 import type { Context } from 'hono';
 import type { AppEnv, AuthUser } from '../env';
 import { AppError, Errors } from './errors';
-import { DATE_RE, TIME_RE, isRangeInvalid, toEventAt } from './datetime';
+import { DATE_RE, TIME_RE, toEventAt, validateEventSchedule } from './datetime';
 
 export function requireGroupId(c: Context<AppEnv>): string {
   const groupId = c.get('groupId') || c.req.header('X-Line-Group-Id') || '';
@@ -80,12 +80,16 @@ export function requireTimeRange(body: Record<string, unknown>): {
   const startTime = requireTime(body.startTime, '開始時間');
   const endDate = requireDate(body.endDate, '結束日期');
   const endTime = requireTime(body.endTime, '結束時間');
-  const startAt = eventAtFromParts(startDate, startTime, '開始時間');
-  const endAt = eventAtFromParts(endDate, endTime, '結束時間');
-  if (isRangeInvalid(startAt, endAt)) {
-    throw Errors.validation('結束時間必須晚於開始時間');
+  eventAtFromParts(startDate, startTime, '開始時間');
+  eventAtFromParts(endDate, endTime, '結束時間');
+  const checked = validateEventSchedule(
+    { startDate, startTime, endDate, endTime },
+    { requireStartInFuture: true },
+  );
+  if (!checked.ok) {
+    throw Errors.validation(checked.message);
   }
-  return { startDate, startTime, endDate, endTime, startAt, endAt };
+  return { startDate, startTime, endDate, endTime, startAt: checked.startAt, endAt: checked.endAt };
 }
 
 export function handleRouteError(err: unknown): { status: number; body: { error: string; message: string } } {
