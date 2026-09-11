@@ -128,5 +128,25 @@ describe('LIFF context token', () => {
     const [body, sig] = token.split('.');
     await expect(verifyLiffContext('unit-secret', `${body}.${sig}x`)).rejects.toThrow();
     expect(buildLiffUrlWithContext('https://liff.line.me/abc', 'tok.en')).toContain('context=tok.en');
+    const withState = buildLiffUrlWithContext('https://liff.line.me/abc', 'tok.en');
+    expect(withState).toContain('liff.state=');
+    const parsed = new URL(withState);
+    expect(parsed.searchParams.get('context')).toBe('tok.en');
+    expect(parsed.searchParams.get('liff.state')).toContain('context=tok.en');
+    expect(withState).not.toMatch(/groupId=/i);
+  });
+
+  it('describeLiffUrlSafe omits token and full URI', async () => {
+    const { buildLiffUrlWithContext, describeLiffUrlSafe } = await import('../src/lib/liff-context');
+    const token = 'payload.signature';
+    const url = buildLiffUrlWithContext('https://liff.line.me/test-liff-id', token);
+    const safe = await describeLiffUrlSafe(url, token);
+    expect(safe.hasContext).toBe(true);
+    expect(safe.hasLiffState).toBe(true);
+    expect(safe.tokenLength).toBe(token.length);
+    expect(safe.urlLength).toBe(url.length);
+    expect(safe.tokenHashPrefix).toMatch(/^[a-f0-9]{8}$/);
+    expect(JSON.stringify(safe)).not.toContain(token);
+    expect(JSON.stringify(safe)).not.toContain(url);
   });
 });

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation, Link } from 'react-router-dom';
 import { StateBlock } from './components/StateBlock';
 import { SiteNav } from './components/SiteNav';
-import { initSession, type LiffSession } from './liff';
+import { initSession, CONTEXT_MISSING_MESSAGE, type LiffSession } from './liff';
 import { EventCreatePage } from './pages/EventCreatePage';
 import { EventDetailPage } from './pages/EventDetailPage';
 import { EventEditPage } from './pages/EventEditPage';
@@ -25,7 +25,7 @@ function GroupGate({
     return (
       <div className="stack">
         <SiteNav current="events" />
-        <StateBlock kind="error" title="請回到 LINE 群組輸入 /list，並從活動卡片開啟 JoyIn">
+        <StateBlock kind="error" title={CONTEXT_MISSING_MESSAGE}>
           活動屬於群組。請在群組輸入 /list，再從活動卡片開啟 JoyIn。
           <div className="row" style={{ marginTop: 12, justifyContent: 'center' }}>
             <Link to="/help" className="btn secondary">

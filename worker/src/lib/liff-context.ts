@@ -49,8 +49,43 @@ async function hmacSha256Base64Url(secret: string, message: string): Promise<str
 
 export function buildLiffUrlWithContext(baseUrl: string, contextToken: string): string {
   const url = new URL(baseUrl);
+  // Primary: query param on LIFF / endpoint URL (URLSearchParams encodes safely)
   url.searchParams.set('context', contextToken);
+  // Fallback for LIFF login redirect: recoverable via liff.state parsing
+  url.searchParams.set('liff.state', `/?context=${contextToken}`);
   return url.toString();
+}
+
+/** Safe flex URL diagnostics — never includes token or full URI. */
+export async function describeLiffUrlSafe(
+  liffUrl: string,
+  contextToken: string,
+): Promise<{
+  hasContext: boolean;
+  hasLiffState: boolean;
+  tokenLength: number;
+  urlLength: number;
+  tokenHashPrefix: string;
+}> {
+  let hasContext = false;
+  let hasLiffState = false;
+  try {
+    const parsed = new URL(liffUrl);
+    hasContext = Boolean(parsed.searchParams.get('context'));
+    hasLiffState = Boolean(parsed.searchParams.get('liff.state'));
+  } catch {
+    hasContext = liffUrl.includes('context=');
+    hasLiffState = liffUrl.includes('liff.state=');
+  }
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(contextToken));
+  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return {
+    hasContext,
+    hasLiffState,
+    tokenLength: contextToken.length,
+    urlLength: liffUrl.length,
+    tokenHashPrefix: hex.slice(0, 8),
+  };
 }
 
 export async function signLiffContext(

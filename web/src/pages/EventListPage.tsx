@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { EventSummary } from '../../../shared/types';
-import { api } from '../api';
+import { api, ApiError } from '../api';
 import { EventCard } from '../components/EventCard';
 import { StateBlock } from '../components/StateBlock';
 import { SiteNav } from '../components/SiteNav';
+import { CONTEXT_INVALID_MESSAGE } from '../liff-context';
 import type { LiffSession } from '../liff';
 
 export function EventListPage({ session }: { session: LiffSession }) {
@@ -14,12 +15,14 @@ export function EventListPage({ session }: { session: LiffSession }) {
   const [events, setEvents] = useState<EventSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [errorTitle, setErrorTitle] = useState('無法載入活動');
   const [listStatus, setListStatus] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError('');
+    setErrorTitle('無法載入活動');
     setListStatus(null);
     api
       .listEvents(session)
@@ -31,12 +34,19 @@ export function EventListPage({ session }: { session: LiffSession }) {
       })
       .catch((err: Error) => {
         if (!cancelled) {
-          setError(err.message);
-          setListStatus(
-            'status' in err && typeof (err as { status?: number }).status === 'number'
-              ? (err as { status: number }).status
-              : null,
-          );
+          const status =
+            err instanceof ApiError
+              ? err.status
+              : 'status' in err && typeof (err as { status?: number }).status === 'number'
+                ? (err as { status: number }).status
+                : null;
+          setListStatus(status);
+          if (status === 401) {
+            setErrorTitle(CONTEXT_INVALID_MESSAGE);
+            setError('請回到 LINE 群組重新輸入 /list，並從新的活動卡片開啟。');
+          } else {
+            setError(err.message);
+          }
         }
       })
       .finally(() => {
@@ -63,6 +73,7 @@ export function EventListPage({ session }: { session: LiffSession }) {
             {[
               `has context token: ${String(session.contextDiag?.hasContextToken ?? false)}`,
               `context token length: ${session.contextDiag?.contextTokenLength ?? 0}`,
+              `context source: ${session.contextDiag?.contextSource || '(none)'}`,
               `GET /api/events status: ${listStatus ?? '(pending)'}`,
               `GET /api/events count: ${loading ? '(loading)' : sorted.length}`,
               `page loadedAt: ${session.contextDiag?.loadedAt ?? '(n/a)'}`,
@@ -76,7 +87,7 @@ export function EventListPage({ session }: { session: LiffSession }) {
         </button>
       </div>
       {loading ? <StateBlock kind="loading" title="活動載入中…" /> : null}
-      {error ? <StateBlock kind="error" title="無法載入活動">{error}</StateBlock> : null}
+      {error ? <StateBlock kind="error" title={errorTitle}>{error}</StateBlock> : null}
       {!loading && !error && sorted.length === 0 ? (
         <StateBlock kind="empty" title="目前沒有尚未結束的活動">
           任何群組成員都可以建立第一場活動。
