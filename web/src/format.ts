@@ -13,6 +13,16 @@ export function formatEventDateTime(eventDate: string, eventTime: string): strin
   return `${date.getFullYear()}年${month}月${day}日（${weekday}）${eventTime}`;
 }
 
+export function formatEventRange(
+  event: Pick<EventSummary, 'startDate' | 'startTime' | 'endDate' | 'endTime'>,
+): string {
+  const start = formatEventDateTime(event.startDate, event.startTime);
+  if (event.startDate === event.endDate) {
+    return `${start} – ${event.endTime}`;
+  }
+  return `${start} – ${formatEventDateTime(event.endDate, event.endTime)}`;
+}
+
 export function waitlistLabel(event: Pick<EventSummary, 'capacity' | 'confirmedCount' | 'waitlistCount' | 'waitlistEnabled'>): string {
   if (event.confirmedCount < event.capacity) {
     return '尚有名額';

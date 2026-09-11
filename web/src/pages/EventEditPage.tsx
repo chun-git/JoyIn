@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { EventForm } from '../components/EventForm';
+import { SiteNav } from '../components/SiteNav';
 import { StateBlock } from '../components/StateBlock';
 import type { LiffSession } from '../liff';
 import type { CreateEventInput, EventDetail } from '../../../shared/types';
@@ -40,6 +41,7 @@ export function EventEditPage({ session }: { session: LiffSession }) {
 
   return (
     <div className="stack">
+      <SiteNav current="events" />
       <div className="topbar">
         <div className="brand">
           <strong>編輯活動</strong>
@@ -52,8 +54,10 @@ export function EventEditPage({ session }: { session: LiffSession }) {
       <EventForm
         initial={{
           name: event.name,
-          eventDate: event.eventDate,
-          eventTime: event.eventTime,
+          startDate: event.startDate,
+          startTime: event.startTime,
+          endDate: event.endDate,
+          endTime: event.endTime,
           address: event.address,
           capacity: event.capacity,
           waitlistEnabled: event.waitlistEnabled,

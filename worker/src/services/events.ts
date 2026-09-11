@@ -1,20 +1,32 @@
-import type { CreateEventInput, EventDetail, EventSummary, UpdateEventInput } from '../../../shared/types';
+import type {
+  CopyEventInput,
+  CreateEventInput,
+  EventDetail,
+  EventSummary,
+  UpdateEventInput,
+} from '../../../shared/types';
 import { Errors } from '../lib/errors';
-import { isDateTimeInPast, isExpired, nowIso } from '../lib/datetime';
+import { isExpired, isRangeInvalid, nowIso } from '../lib/datetime';
 import { newId, toRegistrationRecord } from '../lib/ids';
 import {
   getEventRow,
   insertEvent,
-  insertOrganizerTransfer,
   listRegistrations,
   listUpcomingEvents,
   setEventStatus,
   toEventSummary,
-  transferOrganizerRow,
   updateEventRow,
 } from '../db/repo';
 import type { AuthUser } from '../env';
 import { eventAtFromParts } from '../lib/http';
+
+function endAtOf(row: { end_at: string | null; event_at: string }): string {
+  return row.end_at || row.event_at;
+}
+
+function startAtOf(row: { start_at: string | null; event_at: string }): string {
+  return row.start_at || row.event_at;
+}
 
 export async function listEvents(
   db: D1Database,
@@ -32,7 +44,7 @@ export async function getVisibleEvent(db: D1Database, eventId: string, groupId?:
   if (groupId && row.group_id !== groupId) {
     throw Errors.forbidden('此活動不屬於目前群組');
   }
-  if (isExpired(row.event_at)) {
+  if (isExpired(endAtOf(row))) {
     throw Errors.gone('活動已結束');
   }
   return row;
@@ -72,25 +84,42 @@ export async function getEventDetail(
   };
 }
 
+function resolveRange(input: {
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+}) {
+  const startAt = eventAtFromParts(input.startDate, input.startTime, '開始時間');
+  const endAt = eventAtFromParts(input.endDate, input.endTime, '結束時間');
+  if (isRangeInvalid(startAt, endAt)) {
+    throw Errors.validation('結束時間必須晚於開始時間');
+  }
+  if (isExpired(endAt)) {
+    throw Errors.validation('結束時間不可早於現在');
+  }
+  return { startAt, endAt };
+}
+
 export async function createEvent(
   db: D1Database,
   groupId: string,
   user: AuthUser,
   input: CreateEventInput,
 ): Promise<EventSummary> {
-  if (isDateTimeInPast(input.eventDate, input.eventTime)) {
-    throw Errors.validation('活動時間不可早於現在');
-  }
-
+  const { startAt, endAt } = resolveRange(input);
   const createdAt = nowIso();
   const eventId = newId();
   await insertEvent(db, {
     eventId,
     groupId,
     name: input.name,
-    eventDate: input.eventDate,
-    eventTime: input.eventTime,
-    eventAt: eventAtFromParts(input.eventDate, input.eventTime),
+    startDate: input.startDate,
+    startTime: input.startTime,
+    startAt,
+    endDate: input.endDate,
+    endTime: input.endTime,
+    endAt,
     address: input.address,
     capacity: input.capacity,
     waitlistEnabled: input.waitlistEnabled,
@@ -121,26 +150,24 @@ export async function updateEvent(
     throw Errors.conflict('報名已關閉，無法再修改活動內容');
   }
 
+  const current = toEventSummary(row);
   const next = {
     name: input.name ?? row.name,
-    eventDate: input.eventDate ?? row.event_date,
-    eventTime: input.eventTime ?? row.event_time,
+    startDate: input.startDate ?? current.startDate,
+    startTime: input.startTime ?? current.startTime,
+    endDate: input.endDate ?? current.endDate,
+    endTime: input.endTime ?? current.endTime,
     address: input.address ?? row.address,
     capacity: input.capacity ?? row.capacity,
     waitlistEnabled: input.waitlistEnabled ?? Boolean(row.waitlist_enabled),
   };
+  const { startAt, endAt } = resolveRange(next);
 
   const timeOrLocationChanged =
-    next.eventDate !== row.event_date ||
-    next.eventTime !== row.event_time ||
-    next.address !== row.address;
+    startAt !== startAtOf(row) || endAt !== endAtOf(row) || next.address !== row.address;
 
   if (timeOrLocationChanged && !input.confirmTimeLocationChange) {
     throw Errors.validation('修改時間或地點前請先確認');
-  }
-
-  if (isDateTimeInPast(next.eventDate, next.eventTime)) {
-    throw Errors.validation('活動時間不可早於現在');
   }
 
   const confirmedCount = row.confirmed_count ?? 0;
@@ -153,8 +180,14 @@ export async function updateEvent(
   }
 
   await updateEventRow(db, eventId, {
-    ...next,
-    eventAt: eventAtFromParts(next.eventDate, next.eventTime),
+    name: next.name,
+    startDate: next.startDate,
+    startTime: next.startTime,
+    startAt,
+    endAt,
+    address: next.address,
+    capacity: next.capacity,
+    waitlistEnabled: next.waitlistEnabled,
     updatedAt: nowIso(),
   });
 
@@ -199,36 +232,22 @@ export async function deleteEvent(
   await setEventStatus(db, eventId, 'DELETED', nowIso());
 }
 
-export async function transferOrganizer(
+export async function copyEvent(
   db: D1Database,
   eventId: string,
   user: AuthUser,
   groupId: string,
-  toLineUserId: string,
-  toDisplayName: string,
+  input: CopyEventInput,
 ): Promise<EventSummary> {
-  const row = await getVisibleEvent(db, eventId, groupId);
-  if (row.organizer_line_user_id !== user.lineUserId) {
-    throw Errors.forbidden('只有主揪可以轉移主揪');
-  }
-  if (toLineUserId === user.lineUserId) {
-    throw Errors.validation('不能轉移給自己');
-  }
-
-  const createdAt = nowIso();
-  await insertOrganizerTransfer(db, {
-    transferId: newId(),
-    eventId,
-    fromLineUserId: user.lineUserId,
-    fromDisplayName: user.displayName,
-    toLineUserId,
-    toDisplayName,
-    createdAt,
+  const source = await getVisibleEvent(db, eventId, groupId);
+  return createEvent(db, source.group_id, user, {
+    name: input.name ?? source.name,
+    address: input.address ?? source.address,
+    capacity: input.capacity ?? source.capacity,
+    waitlistEnabled: input.waitlistEnabled ?? Boolean(source.waitlist_enabled),
+    startDate: input.startDate,
+    startTime: input.startTime,
+    endDate: input.endDate,
+    endTime: input.endTime,
   });
-  await transferOrganizerRow(db, eventId, toLineUserId, toDisplayName, createdAt);
-  const updated = await getEventRow(db, eventId);
-  if (!updated) {
-    throw Errors.notFound();
-  }
-  return toEventSummary(updated);
 }

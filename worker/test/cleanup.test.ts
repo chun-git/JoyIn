@@ -7,10 +7,10 @@ describe('expired event cleanup', () => {
     const now = '2026-09-10T00:00:00.000Z';
     await env.DB.prepare(
       `INSERT INTO events (
-        event_id, group_id, name, event_date, event_time, event_at, address,
+        event_id, group_id, name, event_date, event_time, event_at, start_at, end_at, address,
         capacity, waitlist_enabled, status, organizer_line_user_id,
         organizer_display_name, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)`,
     )
       .bind(
         'expired-event',
@@ -19,6 +19,8 @@ describe('expired event cleanup', () => {
         '2026-09-01',
         '19:00',
         '2026-09-01T11:00:00.000Z',
+        '2026-09-01T11:00:00.000Z',
+        '2026-09-01T13:00:00.000Z',
         '台北',
         2,
         1,
@@ -50,10 +52,10 @@ describe('expired event cleanup', () => {
 
     await env.DB.prepare(
       `INSERT INTO events (
-        event_id, group_id, name, event_date, event_time, event_at, address,
+        event_id, group_id, name, event_date, event_time, event_at, start_at, end_at, address,
         capacity, waitlist_enabled, status, organizer_line_user_id,
         organizer_display_name, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)`,
     )
       .bind(
         'future-event',
@@ -62,6 +64,8 @@ describe('expired event cleanup', () => {
         '2026-12-01',
         '19:00',
         '2026-12-01T11:00:00.000Z',
+        '2026-12-01T11:00:00.000Z',
+        '2026-12-01T13:00:00.000Z',
         '台北',
         2,
         1,

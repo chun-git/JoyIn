@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { hmacSha256Base64, verifyLineSignature } from '../src/lib/line-signature';
-import { isDateTimeInPast, toEventAt } from '../src/lib/datetime';
+import { isExpired, isRangeInvalid, toEventAt } from '../src/lib/datetime';
 import { displayLabel, timingSafeEqual } from '../src/lib/ids';
 import { buildEventCarousel } from '../src/lib/line-flex';
 import type { EventSummary } from '../../shared/types';
@@ -10,9 +10,12 @@ describe('datetime', () => {
     expect(toEventAt('2026-12-01', '19:00')).toBe('2026-12-01T11:00:00.000Z');
   });
 
-  it('detects past datetimes', () => {
-    expect(isDateTimeInPast('2020-01-01', '10:00', new Date('2026-09-10T00:00:00Z'))).toBe(true);
-    expect(isDateTimeInPast('2026-12-01', '19:00', new Date('2026-09-10T00:00:00Z'))).toBe(false);
+  it('detects expired and invalid ranges', () => {
+    expect(isExpired('2020-01-01T02:00:00.000Z', new Date('2026-09-10T00:00:00Z'))).toBe(true);
+    expect(isExpired('2026-12-01T11:00:00.000Z', new Date('2026-09-10T00:00:00Z'))).toBe(false);
+    expect(isRangeInvalid('2026-12-01T11:00:00.000Z', '2026-12-01T13:00:00.000Z')).toBe(false);
+    expect(isRangeInvalid('2026-12-01T13:00:00.000Z', '2026-12-01T11:00:00.000Z')).toBe(true);
+    expect(isRangeInvalid('2026-12-01T11:00:00.000Z', '2026-12-01T11:00:00.000Z')).toBe(true);
   });
 });
 
@@ -52,9 +55,12 @@ describe('flex carousel', () => {
       eventId: 'e1',
       groupId: 'g1',
       name: '桌遊夜',
-      eventDate: '2026-12-01',
-      eventTime: '19:00',
-      eventAt: '2026-12-01T11:00:00.000Z',
+      startDate: '2026-12-01',
+      startTime: '19:00',
+      endDate: '2026-12-01',
+      endTime: '21:00',
+      startAt: '2026-12-01T11:00:00.000Z',
+      endAt: '2026-12-01T13:00:00.000Z',
       address: '台北',
       capacity: 10,
       waitlistEnabled: true,
@@ -69,6 +75,7 @@ describe('flex carousel', () => {
     const filled = buildEventCarousel([event], 'https://liff.line.me/test');
     expect(JSON.stringify(filled)).toContain('桌遊夜');
     expect(JSON.stringify(filled)).toContain('3／10');
+    expect(JSON.stringify(filled)).toContain('2026-12-01 19:00 – 21:00');
     expect(JSON.stringify(filled)).toContain('https://liff.line.me/test');
   });
 });

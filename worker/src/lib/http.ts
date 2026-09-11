@@ -1,7 +1,7 @@
 import type { Context } from 'hono';
 import type { AppEnv, AuthUser } from '../env';
 import { AppError, Errors } from './errors';
-import { DATE_RE, TIME_RE, toEventAt } from './datetime';
+import { DATE_RE, TIME_RE, isRangeInvalid, toEventAt } from './datetime';
 
 export function requireGroupId(c: Context<AppEnv>): string {
   const groupId = c.get('groupId') || c.req.header('X-Line-Group-Id') || '';
@@ -44,28 +44,48 @@ export function requireBoolean(value: unknown, field: string): boolean {
   throw Errors.validation(`${field} 需為布林值`);
 }
 
-export function requireDate(value: unknown): string {
-  const date = requireString(value, '活動日期', 10, 10);
+export function requireDate(value: unknown, field = '活動日期'): string {
+  const date = requireString(value, field, 10, 10);
   if (!DATE_RE.test(date)) {
-    throw Errors.validation('活動日期格式需為 YYYY-MM-DD');
+    throw Errors.validation(`${field}格式需為 YYYY-MM-DD`);
   }
   return date;
 }
 
-export function requireTime(value: unknown): string {
-  const time = requireString(value, '活動時間', 5, 5);
+export function requireTime(value: unknown, field = '活動時間'): string {
+  const time = requireString(value, field, 5, 5);
   if (!TIME_RE.test(time)) {
-    throw Errors.validation('活動時間格式需為 HH:MM');
+    throw Errors.validation(`${field}格式需為 HH:MM`);
   }
   return time;
 }
 
-export function eventAtFromParts(eventDate: string, eventTime: string): string {
+export function eventAtFromParts(eventDate: string, eventTime: string, field = '活動時間'): string {
   try {
     return toEventAt(eventDate, eventTime);
   } catch {
-    throw Errors.validation('活動日期或時間無效');
+    throw Errors.validation(`${field}無效`);
   }
+}
+
+export function requireTimeRange(body: Record<string, unknown>): {
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+  startAt: string;
+  endAt: string;
+} {
+  const startDate = requireDate(body.startDate, '開始日期');
+  const startTime = requireTime(body.startTime, '開始時間');
+  const endDate = requireDate(body.endDate, '結束日期');
+  const endTime = requireTime(body.endTime, '結束時間');
+  const startAt = eventAtFromParts(startDate, startTime, '開始時間');
+  const endAt = eventAtFromParts(endDate, endTime, '結束時間');
+  if (isRangeInvalid(startAt, endAt)) {
+    throw Errors.validation('結束時間必須晚於開始時間');
+  }
+  return { startDate, startTime, endDate, endTime, startAt, endAt };
 }
 
 export function handleRouteError(err: unknown): { status: number; body: { error: string; message: string } } {

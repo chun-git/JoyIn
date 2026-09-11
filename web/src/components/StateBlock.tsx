@@ -12,7 +12,7 @@ export function StateBlock({
   return (
     <div className={`panel ${kind}`}>
       <strong>{title}</strong>
-      {children ? <p>{children}</p> : null}
+      {children ? <div className="state-body">{children}</div> : null}
     </div>
   );
 }

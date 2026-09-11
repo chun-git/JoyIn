@@ -1,14 +1,18 @@
 export type EventStatus = 'OPEN' | 'CLOSED' | 'DELETED';
 export type RegistrationType = 'SELF' | 'PROXY';
 export type RegistrationStatus = 'CONFIRMED' | 'WAITLIST';
+export type TransferInviteStatus = 'PENDING' | 'ACCEPTED' | 'CANCELLED';
 
 export interface EventSummary {
   eventId: string;
   groupId: string;
   name: string;
-  eventDate: string;
-  eventTime: string;
-  eventAt: string;
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+  startAt: string;
+  endAt: string;
   address: string;
   capacity: number;
   waitlistEnabled: boolean;
@@ -48,23 +52,44 @@ export interface EventDetail extends EventSummary {
   };
 }
 
-export interface CreateEventInput {
+export interface EventTimeRangeInput {
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+}
+
+export interface CreateEventInput extends EventTimeRangeInput {
   name: string;
-  eventDate: string;
-  eventTime: string;
   address: string;
   capacity: number;
   waitlistEnabled: boolean;
 }
 
-export interface UpdateEventInput {
+export interface UpdateEventInput extends Partial<CreateEventInput> {
+  confirmTimeLocationChange?: boolean;
+}
+
+export interface CopyEventInput extends EventTimeRangeInput {
   name?: string;
-  eventDate?: string;
-  eventTime?: string;
   address?: string;
   capacity?: number;
   waitlistEnabled?: boolean;
-  confirmTimeLocationChange?: boolean;
+}
+
+export interface TransferInviteCreated {
+  token: string;
+  expiresAt: string;
+  sharePath: string;
+}
+
+export interface TransferInvitePreview {
+  eventId: string;
+  eventName: string;
+  organizerDisplayName: string;
+  status: TransferInviteStatus;
+  expiresAt: string;
+  isOrganizer: boolean;
 }
 
 export interface ApiErrorBody {

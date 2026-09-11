@@ -6,6 +6,13 @@ export interface LineFlexMessage {
   contents: Record<string, unknown>;
 }
 
+function formatFlexRange(event: EventSummary): string {
+  if (event.startDate === event.endDate) {
+    return `${event.startDate} ${event.startTime} – ${event.endTime}`;
+  }
+  return `${event.startDate} ${event.startTime} – ${event.endDate} ${event.endTime}`;
+}
+
 function bubble(event: EventSummary, liffUrl: string): Record<string, unknown> {
   return {
     type: 'bubble',
@@ -29,7 +36,7 @@ function bubble(event: EventSummary, liffUrl: string): Record<string, unknown> {
         },
         {
           type: 'text',
-          text: `📅 ${event.eventDate} ${event.eventTime}`,
+          text: `📅 ${formatFlexRange(event)}`,
           size: 'sm',
           color: '#4A6462',
           wrap: true,

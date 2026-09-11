@@ -9,6 +9,8 @@ export interface EventRow {
   event_date: string;
   event_time: string;
   event_at: string;
+  start_at: string | null;
+  end_at: string | null;
   address: string;
   capacity: number;
   waitlist_enabled: number;
@@ -35,14 +37,39 @@ export interface RegistrationRow {
   updated_at: string;
 }
 
+function taipeiParts(iso: string): { date: string; time: string } {
+  const date = new Date(iso);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || '';
+  return {
+    date: `${get('year')}-${get('month')}-${get('day')}`,
+    time: `${get('hour')}:${get('minute')}`,
+  };
+}
+
 export function toEventSummary(row: EventRow): EventSummary {
+  const startAt = row.start_at || row.event_at;
+  const endAt = row.end_at || row.event_at;
+  const start = taipeiParts(startAt);
+  const end = taipeiParts(endAt);
   return {
     eventId: row.event_id,
     groupId: row.group_id,
     name: row.name,
-    eventDate: row.event_date,
-    eventTime: row.event_time,
-    eventAt: row.event_at,
+    startDate: start.date,
+    startTime: start.time,
+    endDate: end.date,
+    endTime: end.time,
+    startAt,
+    endAt,
     address: row.address,
     capacity: row.capacity,
     waitlistEnabled: asBoolean(row.waitlist_enabled),
@@ -81,8 +108,8 @@ export async function listUpcomingEvents(
     ${EVENT_LIST_SQL}
     WHERE e.group_id = ?
       AND e.status != 'DELETED'
-      AND e.event_at > ?
-    ORDER BY e.event_at ASC
+      AND COALESCE(e.end_at, e.event_at) > ?
+    ORDER BY COALESCE(e.start_at, e.event_at) ASC
     ${limitSql}
   `;
   const stmt = typeof limit === 'number'
@@ -109,9 +136,12 @@ export async function insertEvent(
     eventId: string;
     groupId: string;
     name: string;
-    eventDate: string;
-    eventTime: string;
-    eventAt: string;
+    startDate: string;
+    startTime: string;
+    startAt: string;
+    endDate: string;
+    endTime: string;
+    endAt: string;
     address: string;
     capacity: number;
     waitlistEnabled: boolean;
@@ -123,18 +153,20 @@ export async function insertEvent(
   await db
     .prepare(
       `INSERT INTO events (
-        event_id, group_id, name, event_date, event_time, event_at, address,
+        event_id, group_id, name, event_date, event_time, event_at, start_at, end_at, address,
         capacity, waitlist_enabled, status, organizer_line_user_id,
         organizer_display_name, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)`,
     )
     .bind(
       values.eventId,
       values.groupId,
       values.name,
-      values.eventDate,
-      values.eventTime,
-      values.eventAt,
+      values.startDate,
+      values.startTime,
+      values.startAt,
+      values.startAt,
+      values.endAt,
       values.address,
       values.capacity,
       values.waitlistEnabled ? 1 : 0,
@@ -151,9 +183,10 @@ export async function updateEventRow(
   eventId: string,
   patch: {
     name: string;
-    eventDate: string;
-    eventTime: string;
-    eventAt: string;
+    startDate: string;
+    startTime: string;
+    startAt: string;
+    endAt: string;
     address: string;
     capacity: number;
     waitlistEnabled: boolean;
@@ -163,15 +196,17 @@ export async function updateEventRow(
   await db
     .prepare(
       `UPDATE events
-       SET name = ?, event_date = ?, event_time = ?, event_at = ?, address = ?,
-           capacity = ?, waitlist_enabled = ?, updated_at = ?
+       SET name = ?, event_date = ?, event_time = ?, event_at = ?, start_at = ?, end_at = ?,
+           address = ?, capacity = ?, waitlist_enabled = ?, updated_at = ?
        WHERE event_id = ?`,
     )
     .bind(
       patch.name,
-      patch.eventDate,
-      patch.eventTime,
-      patch.eventAt,
+      patch.startDate,
+      patch.startTime,
+      patch.startAt,
+      patch.startAt,
+      patch.endAt,
       patch.address,
       patch.capacity,
       patch.waitlistEnabled ? 1 : 0,
@@ -448,7 +483,7 @@ export async function cleanupExpiredData(db: D1Database, nowIso: string): Promis
   webhooks: number;
 }> {
   const expired = await db
-    .prepare('SELECT event_id FROM events WHERE event_at <= ?')
+    .prepare('SELECT event_id FROM events WHERE COALESCE(end_at, event_at) <= ?')
     .bind(nowIso)
     .all<{ event_id: string }>();
   const ids = expired.results.map((row) => row.event_id);
@@ -467,6 +502,10 @@ export async function cleanupExpiredData(db: D1Database, nowIso: string): Promis
       .bind(...ids)
       .run();
     transfers = trans.meta.changes ?? 0;
+    await db
+      .prepare(`DELETE FROM organizer_transfer_invites WHERE event_id IN (${placeholders})`)
+      .bind(...ids)
+      .run();
     await db.prepare(`DELETE FROM events WHERE event_id IN (${placeholders})`).bind(...ids).run();
   }
 
@@ -482,4 +521,92 @@ export async function cleanupExpiredData(db: D1Database, nowIso: string): Promis
     transfers,
     webhooks: webhook.meta.changes ?? 0,
   };
+}
+
+export interface TransferInviteRow {
+  invite_id: string;
+  event_id: string;
+  token_hash: string;
+  from_line_user_id: string;
+  from_display_name: string;
+  status: 'PENDING' | 'ACCEPTED' | 'CANCELLED';
+  expires_at: string;
+  created_at: string;
+  accepted_at: string | null;
+  accepted_by_line_user_id: string | null;
+  accepted_by_display_name: string | null;
+}
+
+export async function cancelPendingInvites(db: D1Database, eventId: string): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE organizer_transfer_invites
+       SET status = 'CANCELLED'
+       WHERE event_id = ? AND status = 'PENDING'`,
+    )
+    .bind(eventId)
+    .run();
+}
+
+export async function insertTransferInvite(
+  db: D1Database,
+  values: {
+    inviteId: string;
+    eventId: string;
+    tokenHash: string;
+    fromLineUserId: string;
+    fromDisplayName: string;
+    expiresAt: string;
+    createdAt: string;
+  },
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO organizer_transfer_invites (
+        invite_id, event_id, token_hash, from_line_user_id, from_display_name,
+        status, expires_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)`,
+    )
+    .bind(
+      values.inviteId,
+      values.eventId,
+      values.tokenHash,
+      values.fromLineUserId,
+      values.fromDisplayName,
+      values.expiresAt,
+      values.createdAt,
+    )
+    .run();
+}
+
+export async function getInviteByHash(
+  db: D1Database,
+  tokenHash: string,
+): Promise<TransferInviteRow | null> {
+  const row = await db
+    .prepare('SELECT * FROM organizer_transfer_invites WHERE token_hash = ?')
+    .bind(tokenHash)
+    .first<TransferInviteRow>();
+  return row ?? null;
+}
+
+export async function acceptInviteRow(
+  db: D1Database,
+  inviteId: string,
+  acceptedAt: string,
+  acceptedByLineUserId: string,
+  acceptedByDisplayName: string,
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE organizer_transfer_invites
+       SET status = 'ACCEPTED',
+           accepted_at = ?,
+           accepted_by_line_user_id = ?,
+           accepted_by_display_name = ?
+       WHERE invite_id = ? AND status = 'PENDING'`,
+    )
+    .bind(acceptedAt, acceptedByLineUserId, acceptedByDisplayName, inviteId)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
 }

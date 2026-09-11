@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { authHeaders, createEvent, json, request } from './helpers';
+import { authHeaders, authOnlyHeaders, createEvent, futureRange, json, request } from './helpers';
 
 describe('events API', () => {
   it('serves a public health check', async () => {
@@ -27,16 +27,24 @@ describe('events API', () => {
   it('creates and lists upcoming events sorted by time', async () => {
     const first = await createEvent('U-lee', 'Lee', {
       name: '較晚的活動',
-      eventDate: '2026-12-20',
-      eventTime: '19:00',
+      startDate: '2026-12-20',
+      startTime: '19:00',
+      endDate: '2026-12-20',
+      endTime: '21:00',
     });
     const second = await createEvent('U-lee', 'Lee', {
       name: '較近的活動',
-      eventDate: '2026-12-10',
-      eventTime: '18:30',
+      startDate: '2026-12-10',
+      startTime: '18:30',
+      endDate: '2026-12-10',
+      endTime: '20:30',
     });
     expect(first.status).toBe(201);
     expect(second.status).toBe(201);
+    expect(first.body.event.eventId).toBeTruthy();
+    expect(first.body.event.groupId).toBe('G-test-group');
+    expect(first.body.event.startAt).toBeTruthy();
+    expect(first.body.event.endAt).toBeTruthy();
 
     const list = await json<{ events: Array<{ name: string }> }>('/api/events', {
       headers: authHeaders('U-amy', 'Amy'),
@@ -60,10 +68,101 @@ describe('events API', () => {
   it('rejects past event times', async () => {
     const result = await createEvent('U-lee', 'Lee', {
       name: '過去活動',
-      eventDate: '2020-01-01',
-      eventTime: '10:00',
+      startDate: '2020-01-01',
+      startTime: '10:00',
+      endDate: '2020-01-01',
+      endTime: '12:00',
     });
     expect(result.status).toBe(400);
+  });
+
+  it('rejects when end_at is not after start_at', async () => {
+    const equal = await createEvent('U-lee', 'Lee', {
+      name: '同時段',
+      startDate: '2026-12-10',
+      startTime: '19:00',
+      endDate: '2026-12-10',
+      endTime: '19:00',
+    });
+    expect(equal.status).toBe(400);
+    expect((equal.body as { message?: string }).message).toContain('結束時間');
+
+    const reversed = await createEvent('U-lee', 'Lee', {
+      name: '時間顛倒',
+      startDate: '2026-12-10',
+      startTime: '21:00',
+      endDate: '2026-12-10',
+      endTime: '19:00',
+    });
+    expect(reversed.status).toBe(400);
+  });
+
+  it('persists created events in D1 and still returns them after a new query', async () => {
+    const { env } = await import('cloudflare:test');
+    const created = await createEvent('U-lee', 'Lee', { name: '持久化活動' });
+    expect(created.status).toBe(201);
+    const eventId = created.body.event.eventId as string;
+    expect(eventId).toMatch(/\S/);
+    expect(created.body.event.groupId).toBe('G-test-group');
+
+    const row = await env.DB.prepare(
+      'SELECT event_id, group_id, start_at, end_at, name FROM events WHERE event_id = ?',
+    )
+      .bind(eventId)
+      .first<{ event_id: string; group_id: string; start_at: string; end_at: string; name: string }>();
+
+    expect(row).not.toBeNull();
+    expect(row?.event_id).toBe(eventId);
+    expect(row?.group_id).toBe('G-test-group');
+    expect(row?.name).toBe('持久化活動');
+    expect(row?.start_at).toBeTruthy();
+    expect(row?.end_at).toBeTruthy();
+    expect(new Date(row!.end_at).getTime()).toBeGreaterThan(new Date(row!.start_at).getTime());
+
+    const list = await json<{ events: Array<{ eventId: string; groupId: string; name: string }> }>(
+      '/api/events',
+      { headers: authHeaders('U-lee', 'Lee') },
+    );
+    const found = list.body.events.find((event) => event.eventId === eventId);
+    expect(found).toBeTruthy();
+    expect(found?.groupId).toBe('G-test-group');
+    expect(found?.name).toBe('持久化活動');
+  });
+
+  it('keeps already-started events in the list until they end', async () => {
+    const created = await createEvent('U-lee', 'Lee', {
+      name: '進行中活動',
+      startDate: '2026-01-01',
+      startTime: '10:00',
+      endDate: '2026-12-31',
+      endTime: '23:00',
+    });
+    expect(created.status).toBe(201);
+    const list = await json<{ events: Array<{ name: string }> }>('/api/events', {
+      headers: authHeaders('U-amy', 'Amy'),
+    });
+    expect(list.body.events.some((event) => event.name === '進行中活動')).toBe(true);
+  });
+
+  it('lets the organizer update the time range', async () => {
+    const created = await createEvent('U-lee', 'Lee', { name: '改時間' });
+    const patched = await json<{
+      event: { startDate: string; startTime: string; endDate: string; endTime: string };
+    }>(`/api/events/${created.body.event.eventId}`, {
+      method: 'PATCH',
+      headers: authHeaders('U-lee', 'Lee'),
+      body: JSON.stringify({
+        startDate: '2026-12-15',
+        startTime: '18:00',
+        endDate: '2026-12-15',
+        endTime: '22:00',
+        confirmTimeLocationChange: true,
+      }),
+    });
+    expect(patched.status).toBe(200);
+    expect(patched.body.event.startDate).toBe('2026-12-15');
+    expect(patched.body.event.startTime).toBe('18:00');
+    expect(patched.body.event.endTime).toBe('22:00');
   });
 });
 
@@ -91,10 +190,9 @@ describe('organizer permissions', () => {
     });
     expect(memberDelete.status).toBe(403);
 
-    const memberTransfer = await json(`/api/events/${eventId}/transfer-organizer`, {
+    const memberTransfer = await json(`/api/events/${eventId}/transfer-invites`, {
       method: 'POST',
       headers: authHeaders('U-amy', 'Amy'),
-      body: JSON.stringify({ toLineUserId: 'U-amy', toDisplayName: 'Amy' }),
     });
     expect(memberTransfer.status).toBe(403);
   });
@@ -115,12 +213,17 @@ describe('organizer permissions', () => {
     expect(patched.status).toBe(200);
     expect(patched.body.event.name).toBe('主揪管理（更新）');
 
+    const invite = await json<{ invite: { token: string } }>(`/api/events/${eventId}/transfer-invites`, {
+      method: 'POST',
+      headers: authHeaders('U-lee', 'Lee'),
+    });
+    expect(invite.status).toBe(201);
+
     const transferred = await json<{ event: { organizerLineUserId: string } }>(
-      `/api/events/${eventId}/transfer-organizer`,
+      `/api/transfer-invites/${invite.body.invite.token}/accept`,
       {
         method: 'POST',
-        headers: authHeaders('U-lee', 'Lee'),
-        body: JSON.stringify({ toLineUserId: 'U-amy', toDisplayName: 'Amy' }),
+        headers: authHeaders('U-amy', 'Amy'),
       },
     );
     expect(transferred.status).toBe(200);
@@ -360,6 +463,173 @@ describe('registrations and waitlist', () => {
       headers: authHeaders('U-amy', 'Amy'),
     });
     expect(join.status).toBe(409);
+  });
+});
+
+describe('organizer transfer invites', () => {
+  it('rejects unauthenticated preview and accept', async () => {
+    const preview = await json('/api/transfer-invites/not-a-real-token');
+    expect(preview.status).toBe(401);
+    const accept = await json('/api/transfer-invites/not-a-real-token/accept', { method: 'POST' });
+    expect(accept.status).toBe(401);
+  });
+
+  it('lets the organizer create a one-time invite that the recipient must confirm', async () => {
+    const created = await createEvent('U-lee', 'Lee', { name: '轉移邀請' });
+    const eventId = created.body.event.eventId;
+
+    const invite = await json<{ invite: { token: string; sharePath: string; expiresAt: string } }>(
+      `/api/events/${eventId}/transfer-invites`,
+      { method: 'POST', headers: authHeaders('U-lee', 'Lee') },
+    );
+    expect(invite.status).toBe(201);
+    expect(invite.body.invite.token).toBeTruthy();
+    expect(invite.body.invite.sharePath).toBe(`/transfer/${invite.body.invite.token}`);
+
+    const preview = await json<{
+      invite: { eventName: string; status: string; isOrganizer: boolean };
+    }>(`/api/transfer-invites/${invite.body.invite.token}`, {
+      headers: authOnlyHeaders('U-amy', 'Amy'),
+    });
+    expect(preview.status).toBe(200);
+    expect(preview.body.invite.eventName).toBe('轉移邀請');
+    expect(preview.body.invite.status).toBe('PENDING');
+    expect(preview.body.invite.isOrganizer).toBe(false);
+
+    const selfAccept = await json(`/api/transfer-invites/${invite.body.invite.token}/accept`, {
+      method: 'POST',
+      headers: authOnlyHeaders('U-lee', 'Lee'),
+    });
+    expect(selfAccept.status).toBe(400);
+
+    const accepted = await json<{ event: { organizerLineUserId: string } }>(
+      `/api/transfer-invites/${invite.body.invite.token}/accept`,
+      { method: 'POST', headers: authOnlyHeaders('U-amy', 'Amy') },
+    );
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.event.organizerLineUserId).toBe('U-amy');
+
+    const reused = await json(`/api/transfer-invites/${invite.body.invite.token}/accept`, {
+      method: 'POST',
+      headers: authOnlyHeaders('U-bob', 'Bob'),
+    });
+    expect(reused.status).toBe(409);
+  });
+
+  it('invalidates old links when cancelled or regenerated', async () => {
+    const created = await createEvent('U-lee', 'Lee', { name: '重新產生連結' });
+    const eventId = created.body.event.eventId;
+    const first = await json<{ invite: { token: string } }>(`/api/events/${eventId}/transfer-invites`, {
+      method: 'POST',
+      headers: authHeaders('U-lee', 'Lee'),
+    });
+    const second = await json<{ invite: { token: string } }>(`/api/events/${eventId}/transfer-invites`, {
+      method: 'POST',
+      headers: authHeaders('U-lee', 'Lee'),
+    });
+    expect(first.body.invite.token).not.toBe(second.body.invite.token);
+
+    const oldLink = await json(`/api/transfer-invites/${first.body.invite.token}/accept`, {
+      method: 'POST',
+      headers: authOnlyHeaders('U-amy', 'Amy'),
+    });
+    expect(oldLink.status).toBe(410);
+
+    await json(`/api/events/${eventId}/transfer-invites`, {
+      method: 'DELETE',
+      headers: authHeaders('U-lee', 'Lee'),
+    });
+    const cancelled = await json(`/api/transfer-invites/${second.body.invite.token}/accept`, {
+      method: 'POST',
+      headers: authOnlyHeaders('U-amy', 'Amy'),
+    });
+    expect(cancelled.status).toBe(410);
+  });
+
+  it('rejects expired transfer invites', async () => {
+    const { env } = await import('cloudflare:test');
+    const { sha256Hex } = await import('../src/lib/datetime');
+    const created = await createEvent('U-lee', 'Lee', { name: '過期轉移' });
+    const eventId = created.body.event.eventId;
+    const invite = await json<{ invite: { token: string } }>(`/api/events/${eventId}/transfer-invites`, {
+      method: 'POST',
+      headers: authHeaders('U-lee', 'Lee'),
+    });
+    const tokenHash = await sha256Hex(invite.body.invite.token);
+    await env.DB.prepare(
+      `UPDATE organizer_transfer_invites SET expires_at = ? WHERE token_hash = ?`,
+    )
+      .bind('2020-01-01T00:00:00.000Z', tokenHash)
+      .run();
+
+    const expired = await json(`/api/transfer-invites/${invite.body.invite.token}/accept`, {
+      method: 'POST',
+      headers: authOnlyHeaders('U-amy', 'Amy'),
+    });
+    expect(expired.status).toBe(410);
+  });
+});
+
+describe('copy event', () => {
+  it('copies event metadata without registrations or the old id', async () => {
+    const created = await createEvent('U-lee', 'Lee', {
+      name: '原活動',
+      address: '台北車站',
+      capacity: 4,
+      waitlistEnabled: false,
+    });
+    const eventId = created.body.event.eventId;
+    await json(`/api/events/${eventId}/join`, {
+      method: 'POST',
+      headers: authHeaders('U-amy', 'Amy'),
+    });
+
+    const copied = await json<{
+      event: {
+        eventId: string;
+        groupId: string;
+        name: string;
+        address: string;
+        capacity: number;
+        waitlistEnabled: boolean;
+        organizerLineUserId: string;
+        confirmedCount: number;
+        startDate: string;
+        endTime: string;
+      };
+    }>(`/api/events/${eventId}/copy`, {
+      method: 'POST',
+      headers: authHeaders('U-amy', 'Amy'),
+      body: JSON.stringify({
+        ...futureRange(20),
+        name: '原活動',
+      }),
+    });
+    expect(copied.status).toBe(201);
+    expect(copied.body.event.eventId).not.toBe(eventId);
+    expect(copied.body.event.groupId).toBe('G-test-group');
+    expect(copied.body.event.name).toBe('原活動');
+    expect(copied.body.event.address).toBe('台北車站');
+    expect(copied.body.event.capacity).toBe(4);
+    expect(copied.body.event.waitlistEnabled).toBe(false);
+    expect(copied.body.event.organizerLineUserId).toBe('U-amy');
+    expect(copied.body.event.confirmedCount).toBe(0);
+
+    const original = await json<{
+      event: { confirmedCount: number; organizerLineUserId: string };
+    }>(`/api/events/${eventId}`, { headers: authHeaders('U-lee', 'Lee') });
+    expect(original.body.event.confirmedCount).toBe(1);
+    expect(original.body.event.organizerLineUserId).toBe('U-lee');
+  });
+
+  it('rejects copy from another group', async () => {
+    const created = await createEvent('U-lee', 'Lee', { name: '別群活動' });
+    const copied = await json(`/api/events/${created.body.event.eventId}/copy`, {
+      method: 'POST',
+      headers: authHeaders('U-amy', 'Amy', 'G-other'),
+      body: JSON.stringify(futureRange()),
+    });
+    expect(copied.status).toBe(403);
   });
 });
 

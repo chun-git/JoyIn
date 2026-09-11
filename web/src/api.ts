@@ -1,4 +1,12 @@
-import type { CreateEventInput, EventDetail, EventSummary, UpdateEventInput } from '../../shared/types';
+import type {
+  CopyEventInput,
+  CreateEventInput,
+  EventDetail,
+  EventSummary,
+  TransferInviteCreated,
+  TransferInvitePreview,
+  UpdateEventInput,
+} from '../../shared/types';
 import type { LiffSession } from './liff';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
@@ -17,7 +25,9 @@ export class ApiError extends Error {
 async function request<T>(path: string, session: LiffSession, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${session.idToken}`);
-  headers.set('X-Line-Group-Id', session.groupId);
+  if (session.groupId) {
+    headers.set('X-Line-Group-Id', session.groupId);
+  }
   if (init.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
@@ -49,6 +59,11 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(input),
     }),
+  copyEvent: (session: LiffSession, eventId: string, input: CopyEventInput) =>
+    request<{ event: EventSummary }>(`/api/events/${eventId}/copy`, session, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   join: (session: LiffSession, eventId: string) =>
     request(`/api/events/${eventId}/join`, session, { method: 'POST' }),
   proxyJoin: (session: LiffSession, eventId: string, participantName: string) =>
@@ -62,14 +77,16 @@ export const api = {
     request(`/api/events/${eventId}/close`, session, { method: 'POST' }),
   deleteEvent: (session: LiffSession, eventId: string) =>
     request(`/api/events/${eventId}`, session, { method: 'DELETE' }),
-  transferOrganizer: (
-    session: LiffSession,
-    eventId: string,
-    toLineUserId: string,
-    toDisplayName: string,
-  ) =>
-    request(`/api/events/${eventId}/transfer-organizer`, session, {
+  createTransferInvite: (session: LiffSession, eventId: string) =>
+    request<{ invite: TransferInviteCreated }>(`/api/events/${eventId}/transfer-invites`, session, {
       method: 'POST',
-      body: JSON.stringify({ toLineUserId, toDisplayName }),
+    }),
+  cancelTransferInvites: (session: LiffSession, eventId: string) =>
+    request(`/api/events/${eventId}/transfer-invites`, session, { method: 'DELETE' }),
+  previewTransferInvite: (session: LiffSession, token: string) =>
+    request<{ invite: TransferInvitePreview }>(`/api/transfer-invites/${token}`, session),
+  acceptTransferInvite: (session: LiffSession, token: string) =>
+    request<{ event: EventSummary }>(`/api/transfer-invites/${token}/accept`, session, {
+      method: 'POST',
     }),
 };

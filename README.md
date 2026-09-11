@@ -232,15 +232,21 @@ Worker CORS 會回傳請求的 `Origin`，正式 Pages 網域 `https://joyin-web
 | `DELETE` | `/api/registrations/:registrationId` | 取消報名 |
 | `POST` | `/api/events/:eventId/close` | 關閉報名 |
 | `DELETE` | `/api/events/:eventId` | 軟刪除 |
-| `POST` | `/api/events/:eventId/transfer-organizer` | 轉移主揪 |
+| `POST` | `/api/events/:eventId/copy` | 複製活動（需重設開始／結束時間） |
+| `POST` | `/api/events/:eventId/transfer-invites` | 主揪產生一次性轉移連結 |
+| `DELETE` | `/api/events/:eventId/transfer-invites` | 主揪取消尚未使用的轉移連結 |
+| `GET` | `/api/transfer-invites/:token` | 預覽轉移邀請（需登入，不需群組） |
+| `POST` | `/api/transfer-invites/:token/accept` | 確認接受主揪轉移 |
 | `POST` | `/webhook/line` | LINE Webhook |
 
-除 Webhook 與 health 外，API 需：
+除 Webhook、health 與轉移邀請預覽／接受外，API 需：
 
 ```text
 Authorization: Bearer <LIFF ID Token>
 X-Line-Group-Id: <Group ID>
 ```
+
+轉移邀請的 `GET/POST /api/transfer-invites/:token` 只需 LIFF ID Token，用來辨識對方的 LINE 身分。
 
 ## 權限摘要
 

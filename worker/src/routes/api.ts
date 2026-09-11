@@ -3,7 +3,6 @@ import type { AppEnv } from '../env';
 import { liffAuth } from '../middleware/auth';
 import { AppError } from '../lib/errors';
 import {
-  eventAtFromParts,
   handleRouteError,
   parseJson,
   requireBoolean,
@@ -12,19 +11,26 @@ import {
   requireGroupId,
   requireString,
   requireTime,
+  requireTimeRange,
   userOf,
 } from '../lib/http';
 import {
   closeEvent,
+  copyEvent,
   createEvent,
   deleteEvent,
   getEventDetail,
   listEvents,
-  transferOrganizer,
   updateEvent,
 } from '../services/events';
+import {
+  acceptTransferInvite,
+  cancelTransferInvites,
+  createTransferInvite,
+  previewTransferInvite,
+} from '../services/transfer';
 import { cancelRegistration, joinProxy, joinSelf } from '../services/registrations';
-import type { UpdateEventInput } from '../../../shared/types';
+import type { CopyEventInput, UpdateEventInput } from '../../../shared/types';
 
 export const api = new Hono<AppEnv>();
 
@@ -45,6 +51,7 @@ api.get('/config', (c) =>
 api.use('/events/*', liffAuth);
 api.use('/events', liffAuth);
 api.use('/registrations/*', liffAuth);
+api.use('/transfer-invites/*', liffAuth);
 
 api.get('/events', async (c) => {
   const groupId = requireGroupId(c);
@@ -55,13 +62,16 @@ api.get('/events', async (c) => {
 api.post('/events', async (c) => {
   const groupId = requireGroupId(c);
   const body = parseJson<Record<string, unknown>>(await c.req.json());
+  const range = requireTimeRange(body);
   const event = await createEvent(c.env.DB, groupId, userOf(c), {
     name: requireString(body.name, '活動名稱', 1, 50),
-    eventDate: requireDate(body.eventDate),
-    eventTime: requireTime(body.eventTime),
     address: requireString(body.address, '活動地址', 1, 120),
     capacity: requireCapacity(body.capacity),
     waitlistEnabled: requireBoolean(body.waitlistEnabled, '是否開放候補'),
+    startDate: range.startDate,
+    startTime: range.startTime,
+    endDate: range.endDate,
+    endTime: range.endTime,
   });
   return c.json({ event }, 201);
 });
@@ -77,8 +87,10 @@ api.patch('/events/:eventId', async (c) => {
   const body = parseJson<Record<string, unknown>>(await c.req.json());
   const input: UpdateEventInput = {};
   if (body.name !== undefined) input.name = requireString(body.name, '活動名稱', 1, 50);
-  if (body.eventDate !== undefined) input.eventDate = requireDate(body.eventDate);
-  if (body.eventTime !== undefined) input.eventTime = requireTime(body.eventTime);
+  if (body.startDate !== undefined) input.startDate = requireDate(body.startDate, '開始日期');
+  if (body.startTime !== undefined) input.startTime = requireTime(body.startTime, '開始時間');
+  if (body.endDate !== undefined) input.endDate = requireDate(body.endDate, '結束日期');
+  if (body.endTime !== undefined) input.endTime = requireTime(body.endTime, '結束時間');
   if (body.address !== undefined) input.address = requireString(body.address, '活動地址', 1, 120);
   if (body.capacity !== undefined) input.capacity = requireCapacity(body.capacity);
   if (body.waitlistEnabled !== undefined) {
@@ -89,9 +101,6 @@ api.patch('/events/:eventId', async (c) => {
       body.confirmTimeLocationChange,
       'confirmTimeLocationChange',
     );
-  }
-  if (input.eventDate && input.eventTime) {
-    eventAtFromParts(input.eventDate, input.eventTime);
   }
   const event = await updateEvent(c.env.DB, c.req.param('eventId'), userOf(c), groupId, input);
   return c.json({ event });
@@ -129,17 +138,45 @@ api.delete('/events/:eventId', async (c) => {
   return c.json({ ok: true });
 });
 
-api.post('/events/:eventId/transfer-organizer', async (c) => {
+api.post('/events/:eventId/copy', async (c) => {
   const groupId = requireGroupId(c);
   const body = parseJson<Record<string, unknown>>(await c.req.json());
-  const event = await transferOrganizer(
-    c.env.DB,
-    c.req.param('eventId'),
-    userOf(c),
-    groupId,
-    requireString(body.toLineUserId, '新主揪 LINE User ID', 1, 64),
-    requireString(body.toDisplayName, '新主揪顯示名稱', 1, 40),
-  );
+  const range = requireTimeRange(body);
+  const input: CopyEventInput = {
+    startDate: range.startDate,
+    startTime: range.startTime,
+    endDate: range.endDate,
+    endTime: range.endTime,
+  };
+  if (body.name !== undefined) input.name = requireString(body.name, '活動名稱', 1, 50);
+  if (body.address !== undefined) input.address = requireString(body.address, '活動地址', 1, 120);
+  if (body.capacity !== undefined) input.capacity = requireCapacity(body.capacity);
+  if (body.waitlistEnabled !== undefined) {
+    input.waitlistEnabled = requireBoolean(body.waitlistEnabled, '是否開放候補');
+  }
+  const event = await copyEvent(c.env.DB, c.req.param('eventId'), userOf(c), groupId, input);
+  return c.json({ event }, 201);
+});
+
+api.post('/events/:eventId/transfer-invites', async (c) => {
+  const groupId = requireGroupId(c);
+  const invite = await createTransferInvite(c.env.DB, c.req.param('eventId'), userOf(c), groupId);
+  return c.json({ invite }, 201);
+});
+
+api.delete('/events/:eventId/transfer-invites', async (c) => {
+  const groupId = requireGroupId(c);
+  await cancelTransferInvites(c.env.DB, c.req.param('eventId'), userOf(c), groupId);
+  return c.json({ ok: true });
+});
+
+api.get('/transfer-invites/:token', async (c) => {
+  const invite = await previewTransferInvite(c.env.DB, c.req.param('token'), userOf(c));
+  return c.json({ invite });
+});
+
+api.post('/transfer-invites/:token/accept', async (c) => {
+  const event = await acceptTransferInvite(c.env.DB, c.req.param('token'), userOf(c));
   return c.json({ event });
 });
 

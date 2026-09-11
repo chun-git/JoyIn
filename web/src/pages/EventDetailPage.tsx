@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import type { EventDetail, RegistrationRecord } from '../../../shared/types';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import type { EventDetail, RegistrationRecord, TransferInviteCreated } from '../../../shared/types';
 import { api } from '../api';
 import { EventCard } from '../components/EventCard';
+import { InlineHint } from '../components/InlineHint';
+import { SiteNav } from '../components/SiteNav';
 import { StateBlock } from '../components/StateBlock';
 import type { LiffSession } from '../liff';
 
@@ -42,13 +44,13 @@ function RegistrationList({
 
 export function EventDetailPage({ session }: { session: LiffSession }) {
   const { eventId = '' } = useParams();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const [event, setEvent] = useState<EventDetail | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [proxyName, setProxyName] = useState('');
-  const [transferUserId, setTransferUserId] = useState('');
-  const [transferName, setTransferName] = useState('');
+  const [invite, setInvite] = useState<TransferInviteCreated | null>(null);
   const [pending, setPending] = useState(false);
 
   async function reload() {
@@ -85,6 +87,10 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
     }
   }
 
+  const shareUrl = invite ? `${window.location.origin}${invite.sharePath}` : '';
+  const justCreated = searchParams.get('created') === '1';
+  const justCopied = searchParams.get('copied') === '1';
+
   if (!event && !error) return <StateBlock kind="loading" title="載入活動中…" />;
   if (error && !event) return <StateBlock kind="error" title="無法載入活動">{error}</StateBlock>;
   if (!event) return null;
@@ -99,18 +105,38 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
 
   return (
     <div className="stack">
+      <SiteNav current="events" />
       <div className="topbar">
         <button className="btn ghost" type="button" onClick={() => navigate('/')}>
           返回列表
         </button>
       </div>
+      {justCreated || justCopied ? (
+        <section className="panel stack">
+          <strong>{justCopied ? '已建立複製活動' : '活動已建立，你是這場的主揪'}</strong>
+          <p className="hint">可以開始邀請大家報名，或先看主揪能做哪些管理。</p>
+          <div className="row">
+            <Link to="/help/organize" className="btn secondary">
+              查看主揪操作
+            </Link>
+          </div>
+        </section>
+      ) : null}
       {notice ? <div className="toast">{notice}</div> : null}
       {error ? <StateBlock kind="error" title="操作失敗">{error}</StateBlock> : null}
       <EventCard event={event} />
       <p className="hint">主揪：{event.organizerDisplayName}</p>
+      <div className="row">
+        <button className="btn secondary" type="button" onClick={() => navigate(`/events/new?copy=${eventId}`)}>
+          複製活動
+        </button>
+      </div>
 
       <section className="panel stack">
         <h2>報名</h2>
+        <Link to="/help/join" className="hint-link">
+          查看報名與代報說明
+        </Link>
         {event.status !== 'OPEN' ? <p className="hint">此活動已關閉報名。</p> : null}
         <div className="row">
           <button
@@ -200,48 +226,61 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
               刪除活動
             </button>
           </div>
-          <label className="field">
-            <span>轉移主揪（LINE User ID）</span>
-            <input value={transferUserId} onChange={(e) => setTransferUserId(e.target.value)} />
-          </label>
-          <label className="field">
-            <span>新主揪顯示名稱</span>
-            <input value={transferName} onChange={(e) => setTransferName(e.target.value)} />
-          </label>
-          <p className="hint">可從正式報名名單中選擇本人報名者作為新主揪。</p>
-          <select
-            onChange={(e) => {
-              const selected = event.registrations.confirmed.find(
-                (item) => item.registrationId === e.target.value,
-              );
-              if (selected?.lineUserId) {
-                setTransferUserId(selected.lineUserId);
-                setTransferName(selected.participantName);
+          <h3>轉移主揪</h3>
+          <p className="hint">產生一次性邀請連結後分享給對方。對方開啟後會以 LINE 身分確認，才會完成轉移。</p>
+          <InlineHint question="什麼是轉移主揪？">
+            把這場活動的管理權交給另一位群組成員。對方開啟邀請連結並按確認後才會生效，不必輸入 LINE User ID。
+            <div className="row" style={{ marginTop: 8 }}>
+              <Link to="/help/transfer" className="hint-link">
+                查看完整步驟
+              </Link>
+            </div>
+          </InlineHint>
+          <div className="row">
+            <button
+              className="btn"
+              type="button"
+              disabled={pending}
+              onClick={() =>
+                run(async () => {
+                  const result = await api.createTransferInvite(session, eventId);
+                  setInvite(result.invite);
+                }, invite ? '已重新產生轉移連結，舊連結已失效' : '已產生轉移連結')
               }
-            }}
-          >
-            <option value="">從正式報名名單選擇</option>
-            {event.registrations.confirmed
-              .filter((item) => item.type === 'SELF' && item.lineUserId)
-              .map((item) => (
-                <option key={item.registrationId} value={item.registrationId}>
-                  {item.participantName}
-                </option>
-              ))}
-          </select>
-          <button
-            className="btn"
-            type="button"
-            disabled={pending || !transferUserId.trim() || !transferName.trim()}
-            onClick={() =>
-              run(
-                () => api.transferOrganizer(session, eventId, transferUserId.trim(), transferName.trim()),
-                '主揪已轉移',
-              )
-            }
-          >
-            轉移主揪
-          </button>
+            >
+              {invite ? '重新產生連結' : '產生轉移連結'}
+            </button>
+            {invite ? (
+              <button
+                className="btn secondary"
+                type="button"
+                disabled={pending}
+                onClick={() =>
+                  run(async () => {
+                    await api.cancelTransferInvites(session, eventId);
+                    setInvite(null);
+                  }, '已取消轉移連結')
+                }
+              >
+                取消連結
+              </button>
+            ) : null}
+          </div>
+          {invite ? (
+            <>
+              <div className="share-box">{shareUrl}</div>
+              <button
+                className="btn secondary"
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(shareUrl);
+                  setNotice('已複製轉移連結');
+                }}
+              >
+                複製連結
+              </button>
+            </>
+          ) : null}
         </section>
       ) : null}
     </div>

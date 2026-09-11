@@ -1,5 +1,5 @@
 import type { EventSummary } from '../../../shared/types';
-import { eventStatusLabel, eventStatusTone, formatEventDateTime, waitlistLabel } from '../format';
+import { eventStatusLabel, eventStatusTone, formatEventRange, waitlistLabel } from '../format';
 
 export function EventCard({
   event,
@@ -13,7 +13,7 @@ export function EventCard({
     <>
       <h3>{event.name}</h3>
       <div className="meta">
-        <div>📅 {formatEventDateTime(event.eventDate, event.eventTime)}</div>
+        <div>📅 {formatEventRange(event)}</div>
         <div>📍 {event.address}</div>
         <div>
           👥 {event.confirmedCount}／{event.capacity}
