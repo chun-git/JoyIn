@@ -1,0 +1,30 @@
+# dependencies
+node_modules/
+
+# build
+dist/
+web/dist/
+dist-worker/
+.wrangler/
+
+# env & secrets
+.env
+.env.local
+.env.*.local
+web/.env
+web/.env.local
+*.pem
+
+# logs & OS
+*.log
+.DS_Store
+coverage/
+
+# wrangler / cloudflare
+.mf/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# typescript
+*.tsbuildinfo

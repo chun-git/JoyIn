@@ -1,0 +1,10 @@
+# 複製為 .dev.vars 後填入本機開發值。此檔可提交；.dev.vars 不可提交。
+
+LINE_CHANNEL_ACCESS_TOKEN=your-line-channel-access-token
+LINE_CHANNEL_SECRET=your-line-channel-secret
+LINE_CHANNEL_ID=your-line-channel-id
+LIFF_ID=your-liff-id
+LIFF_URL=https://liff.line.me/your-liff-id
+
+# 本機可開啟測試身分，正式環境必須為 false
+ALLOW_TEST_AUTH=true

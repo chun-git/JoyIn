@@ -1,0 +1,30 @@
+name = "joyin"
+main = "worker/src/index.ts"
+compatibility_date = "2025-09-06"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/webhook/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "joyin-db"
+database_id = "caff6456-ad50-4d41-a112-6501c67ae534"
+migrations_dir = "migrations"
+
+[triggers]
+crons = ["0 16 * * *"]
+
+[vars]
+ALLOW_TEST_AUTH = "false"
+APP_TIMEZONE = "Asia/Taipei"
+
+# Secrets 請用 wrangler secret put，不要寫進此檔：
+# LINE_CHANNEL_ACCESS_TOKEN
+# LINE_CHANNEL_SECRET
+# LINE_CHANNEL_ID
+# LIFF_ID
+# LIFF_URL

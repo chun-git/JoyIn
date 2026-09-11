@@ -1,0 +1,14 @@
+name = "joyin-test"
+main = "worker/src/index.ts"
+compatibility_date = "2025-09-06"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "joyin"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[vars]
+ALLOW_TEST_AUTH = "true"
+APP_TIMEZONE = "Asia/Taipei"
