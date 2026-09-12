@@ -5,6 +5,8 @@ LINE_CHANNEL_SECRET=your-line-channel-secret
 LINE_CHANNEL_ID=your-line-channel-id
 LIFF_ID=your-liff-id
 LIFF_URL=https://liff.line.me/your-liff-id
+# Must match LIFF Endpoint URL in LINE Developers (used by Flex card links)
+LIFF_ENDPOINT_URL=https://joyin-web.pages.dev
 # HMAC secret for signed LIFF ?context= tokens (do not reuse LINE_CHANNEL_SECRET)
 LIFF_CONTEXT_SIGNING_SECRET=local-dev-liff-context-signing-secret
 

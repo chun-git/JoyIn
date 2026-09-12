@@ -12,3 +12,4 @@ migrations_dir = "migrations"
 [vars]
 ALLOW_TEST_AUTH = "true"
 APP_TIMEZONE = "Asia/Taipei"
+LIFF_ENDPOINT_URL = "https://joyin-web.pages.dev"

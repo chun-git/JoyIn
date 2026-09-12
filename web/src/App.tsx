@@ -63,6 +63,16 @@ function LiffApp() {
         <StateBlock kind="error" title="無法開啟 JoyIn">
           {bootError}
           <div className="row" style={{ marginTop: 12, justifyContent: 'center' }}>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => {
+                setBootError('');
+                boot();
+              }}
+            >
+              重試
+            </button>
             <Link to="/help" className="btn secondary">
               查看使用手冊
             </Link>

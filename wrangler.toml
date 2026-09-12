@@ -21,6 +21,8 @@ crons = ["0 16 * * *"]
 [vars]
 ALLOW_TEST_AUTH = "false"
 APP_TIMEZONE = "Asia/Taipei"
+# Public Pages origin used in Flex URI actions (must match LIFF Endpoint URL)
+LIFF_ENDPOINT_URL = "https://joyin-web.pages.dev"
 
 # Secrets 請用 wrangler secret put，不要寫進此檔：
 # LINE_CHANNEL_ACCESS_TOKEN

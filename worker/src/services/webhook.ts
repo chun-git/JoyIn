@@ -98,8 +98,9 @@ export async function handleLineWebhook(
     // Official group key = webhook source.groupId only
     const upcoming = await listEvents(env.DB, groupId, 5);
     const contextToken = await signLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, groupId);
-    const baseUrl = env.LIFF_URL || `https://liff.line.me/${env.LIFF_ID}`;
-    const liffUrl = buildLiffUrlWithContext(baseUrl, contextToken);
+    // Flex URI = Endpoint URL + context (not liff.line.me) so first-time login works.
+    const endpoint = (env.LIFF_ENDPOINT_URL || 'https://joyin-web.pages.dev').replace(/\/$/, '');
+    const liffUrl = buildLiffUrlWithContext(endpoint, contextToken);
     const safe = await describeLiffUrlSafe(liffUrl, contextToken);
     // Decode payload fields for safe diagnostics only (no groupId / token values)
     let hasExpiresAt = false;

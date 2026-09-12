@@ -134,12 +134,13 @@ describe('LIFF context token', () => {
     await expect(verifyLiffContext('unit-secret', 'not-a-token')).rejects.toMatchObject({
       code: 'context_malformed',
     });
-    expect(buildLiffUrlWithContext('https://liff.line.me/abc', 'tok.en')).toContain('context=tok.en');
-    const flexUrl = buildLiffUrlWithContext('https://liff.line.me/abc', 'tok.en');
-    // Must not manually set liff.state on liff.line.me (OAuth 400 risk)
+    expect(buildLiffUrlWithContext('https://joyin-web.pages.dev', 'tok.en')).toContain('context=tok.en');
+    const flexUrl = buildLiffUrlWithContext('https://joyin-web.pages.dev', 'tok.en');
+    // Flex cards use Endpoint URL, not liff.line.me (avoids LIFF-browser login 400)
+    expect(flexUrl.startsWith('https://joyin-web.pages.dev')).toBe(true);
     expect(flexUrl).not.toContain('liff.state=');
+    expect(flexUrl).not.toContain('liff.line.me');
     const parsed = new URL(flexUrl);
-    expect(parsed.pathname.endsWith('/')).toBe(true);
     expect(parsed.searchParams.get('context')).toBe('tok.en');
     expect(parsed.searchParams.get('liff.state')).toBeNull();
     expect(flexUrl).not.toMatch(/groupId=/i);
@@ -158,10 +159,9 @@ describe('LIFF context token', () => {
   it('describeLiffUrlSafe omits token and full URI', async () => {
     const { buildLiffUrlWithContext, describeLiffUrlSafe } = await import('../src/lib/liff-context');
     const token = 'payload.signature';
-    const url = buildLiffUrlWithContext('https://liff.line.me/test-liff-id', token);
+    const url = buildLiffUrlWithContext('https://joyin-web.pages.dev', token);
     const safe = await describeLiffUrlSafe(url, token);
     expect(safe.hasContext).toBe(true);
-    // Flex URL no longer embeds liff.state; LINE adds it on redirect.
     expect(safe.hasLiffState).toBe(false);
     expect(safe.tokenLength).toBe(token.length);
     expect(safe.urlLength).toBe(url.length);

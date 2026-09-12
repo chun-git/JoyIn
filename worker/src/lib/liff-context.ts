@@ -81,22 +81,23 @@ async function hmacSha256Base64Url(secret: string, message: string): Promise<str
 }
 
 /**
- * Build a LIFF open URL that carries the signed context token.
+ * Build the URL embedded in Flex cards.
  *
- * Use path/query AFTER the LIFF ID (`…/{liffId}/?context=…`) so LINE itself
- * places that suffix into `liff.state` on redirect.
+ * Prefer the LIFF Endpoint URL (Pages origin) with `?context=…`, not
+ * `https://liff.line.me/{id}/?context=…`.
  *
- * Do NOT set `liff.state` manually on `liff.line.me` — that conflicts with
- * LINE Login / OAuth and commonly surfaces as HTTP 400 Bad Request.
+ * Opening via liff.line.me puts first-time users in the LIFF browser, where
+ * `liff.login()` is unsupported and commonly returns HTTP 400. Opening the
+ * Endpoint URL uses LINE's in-app / external browser where login works.
  */
 export function buildLiffUrlWithContext(baseUrl: string, contextToken: string): string {
   const url = new URL(baseUrl);
-  // Normalize to …/{liffId}/?context=TOKEN (additional info after LIFF ID)
-  if (!url.pathname.endsWith('/')) {
-    url.pathname = `${url.pathname}/`;
-  }
   url.search = '';
   url.hash = '';
+  // Endpoint roots are typically `/`; keep existing path if present.
+  if (!url.pathname || url.pathname === '') {
+    url.pathname = '/';
+  }
   url.searchParams.set('context', contextToken);
   return url.toString();
 }

@@ -46,6 +46,7 @@ api.get('/config', (c) =>
   c.json({
     liffId: c.env.LIFF_ID || '',
     liffUrl: c.env.LIFF_URL || '',
+    endpointUrl: c.env.LIFF_ENDPOINT_URL || 'https://joyin-web.pages.dev',
   }),
 );
 

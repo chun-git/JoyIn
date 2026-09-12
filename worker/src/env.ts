@@ -6,6 +6,8 @@ export interface Bindings {
   LINE_CHANNEL_ID: string;
   LIFF_ID: string;
   LIFF_URL: string;
+  /** Public Pages origin — must match LIFF Endpoint URL in LINE Developers */
+  LIFF_ENDPOINT_URL: string;
   /** HMAC secret for signed LIFF group context tokens — never log token values */
   LIFF_CONTEXT_SIGNING_SECRET: string;
   ALLOW_TEST_AUTH: string;

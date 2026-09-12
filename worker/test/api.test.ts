@@ -105,24 +105,18 @@ describe('events API', () => {
     );
     const { env } = await import('cloudflare:test');
     const original = await signLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, 'G-test-group');
-    const flexUrl = buildLiffUrlWithContext('https://liff.line.me/test-liff-id', original);
+    const flexUrl = buildLiffUrlWithContext('https://joyin-web.pages.dev', original);
     const parsed = new URL(flexUrl);
     const fromQuery = parsed.searchParams.get('context') || '';
     expect(fromQuery).toBe(original);
+    expect(parsed.origin).toBe('https://joyin-web.pages.dev');
     expect(parsed.searchParams.get('liff.state')).toBeNull();
     await expect(verifyLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, fromQuery)).resolves.toMatchObject({
       groupId: 'G-test-group',
     });
 
-    // Simulate LINE primary redirect: additional info lands in liff.state
-    const lineStyleState = `/?context=${original}`;
-    const fromStateUrl = new URL(lineStyleState, 'https://joyin.invalid');
-    const fromState = fromStateUrl.searchParams.get('context') || '';
-    expect(fromState).toBe(original);
-    await expect(verifyLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, fromState)).resolves.toMatchObject({
-      groupId: 'G-test-group',
-    });
-
+    // Endpoint-style deep link still carries the signed context query
+    const fromState = fromQuery;
     const list = await json<{ events: unknown[] }>('/api/events', {
       headers: {
         Authorization: 'Bearer test:U-lee:Lee',
@@ -886,7 +880,8 @@ describe('LINE webhook', () => {
       expect(replies.length).toBe(1);
       const serialized = JSON.stringify(replies[0]);
       expect(serialized).toContain('context=');
-      expect(serialized).toContain('liff.line.me/test-liff-id');
+      expect(serialized).toContain('https://joyin-web.pages.dev/?context=');
+      expect(serialized).not.toContain('liff.line.me');
 
       const match = serialized.match(/context=([^"&\\]+)/);
       expect(match?.[1]).toBeTruthy();
