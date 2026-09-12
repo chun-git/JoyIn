@@ -24,6 +24,14 @@ function memoryStorage(initial: Record<string, string> = {}) {
 
 const SAMPLE = `${'a'.repeat(40)}.${'b'.repeat(40)}`;
 
+function encodeContextPayload(payload: Record<string, unknown>): string {
+  const body = btoa(JSON.stringify(payload))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+  return `${body}.${'s'.repeat(40)}`;
+}
+
 describe('getJoyInContextToken', () => {
   let storage: ReturnType<typeof memoryStorage>;
 
@@ -37,7 +45,6 @@ describe('getJoyInContextToken', () => {
       storage,
     });
     expect(result).toEqual({ token: SAMPLE, source: 'search' });
-    // Simulate what a mistaken second decodeURIComponent would do to a token with no %
     expect(decodeURIComponent(result.token)).toBe(SAMPLE);
   });
 
@@ -51,7 +58,6 @@ describe('getJoyInContextToken', () => {
   });
 
   it('reads context from URL-encoded liff.state once', () => {
-    // URLSearchParams.get already decodes once; value may still contain %2F style path
     const onceEncodedPath = encodeURIComponent(`/?context=${SAMPLE}`);
     const result = getJoyInContextToken({
       search: `?liff.state=${encodeURIComponent(onceEncodedPath)}`,
@@ -61,7 +67,7 @@ describe('getJoyInContextToken', () => {
     expect(result.source).toBe('liff.state');
   });
 
-  it('restores context from sessionStorage after login redirect and clears it', () => {
+  it('restores context from sessionStorage after login redirect and keeps it by default', () => {
     preserveJoyInContextBeforeInit({
       search: `?context=${SAMPLE}`,
       storage,
@@ -71,10 +77,31 @@ describe('getJoyInContextToken', () => {
     const afterRedirect = getJoyInContextToken({
       search: '',
       storage,
-      clearStorageOnRestore: true,
     });
     expect(afterRedirect).toEqual({ token: SAMPLE, source: 'sessionStorage' });
+    expect(storage.getItem(JOYIN_CONTEXT_STORAGE_KEY)).toBe(SAMPLE);
+  });
+
+  it('optionally clears sessionStorage when clearStorageOnRestore is true', () => {
+    storage.setItem(JOYIN_CONTEXT_STORAGE_KEY, SAMPLE);
+    const cleared = getJoyInContextToken({
+      search: '',
+      storage,
+      clearStorageOnRestore: true,
+    });
+    expect(cleared.token).toBe(SAMPLE);
     expect(storage.getItem(JOYIN_CONTEXT_STORAGE_KEY)).toBeNull();
+  });
+
+  it('never writes Authorization or ID Token into the context storage key', () => {
+    const jwt = `${'h'.repeat(16)}.${'p'.repeat(16)}.${'s'.repeat(16)}`;
+    preserveJoyInContextBeforeInit({
+      search: `?context=${SAMPLE}`,
+      storage,
+    });
+    expect(storage.getItem(JOYIN_CONTEXT_STORAGE_KEY)).toBe(SAMPLE);
+    expect(storage.getItem(JOYIN_CONTEXT_STORAGE_KEY)).not.toBe(jwt);
+    expect(storage.getItem(JOYIN_CONTEXT_STORAGE_KEY)?.startsWith('Bearer')).toBe(false);
   });
 
   it('falls back to sessionStorage when oauth liff.state has no valid context token', () => {
@@ -125,5 +152,25 @@ describe('buildLiffLoginRedirectUri', () => {
     expect(buildLiffLoginRedirectUri('https://joyin-web.pages.dev/events/new')).toBe(
       'https://joyin-web.pages.dev/',
     );
+  });
+});
+
+describe('context expiry and overwrite', () => {
+  it('overwrites previous stored context when a new /list context arrives', () => {
+    const storage = memoryStorage();
+    const older = encodeContextPayload({ g: 'G-old', exp: Date.now() + 60_000, n: 'n1' });
+    const newer = encodeContextPayload({ g: 'G-new', exp: Date.now() + 60_000, n: 'n2' });
+    storage.setItem(JOYIN_CONTEXT_STORAGE_KEY, older);
+    preserveJoyInContextBeforeInit({ search: `?context=${newer}`, storage });
+    expect(storage.getItem(JOYIN_CONTEXT_STORAGE_KEY)).toBe(newer);
+  });
+
+  it('clears expired context from sessionStorage', () => {
+    const storage = memoryStorage();
+    const expired = encodeContextPayload({ g: 'G-x', exp: Date.now() - 1_000, n: 'n3' });
+    storage.setItem(JOYIN_CONTEXT_STORAGE_KEY, expired);
+    const result = getJoyInContextToken({ search: '', storage, nowMs: Date.now() });
+    expect(result.token).toBe('');
+    expect(storage.getItem(JOYIN_CONTEXT_STORAGE_KEY)).toBeNull();
   });
 });

@@ -136,6 +136,7 @@ export async function verifyLiffIdToken(
 /**
  * Resolve groupId only from a verified X-JoyIn-Context token.
  * Never trusts X-Line-Group-Id or any client-supplied group identifier.
+ * Never compares context to the current Authorization user — group tokens are shared.
  */
 async function resolveVerifiedGroupId(c: {
   req: { header: (name: string) => string | undefined };
@@ -148,6 +149,7 @@ async function resolveVerifiedGroupId(c: {
     return '';
   }
   try {
+    // Verify group context alone. Do not pass c.get('user') — no user binding check.
     const verified = await verifyLiffContext(c.env.LIFF_CONTEXT_SIGNING_SECRET, token);
     console.info('[JoyIn context]', {
       reason: 'ok',

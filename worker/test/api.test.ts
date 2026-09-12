@@ -143,6 +143,100 @@ describe('events API', () => {
     expect(sameList.body.events.some((e) => e.name === '群組 A 活動')).toBe(true);
   });
 
+  it('lets member B reuse A’s group context token with B’s own Authorization', async () => {
+    const { signLiffContext, decodeLiffContextPayloadUnsafe } = await import('../src/lib/liff-context');
+    const { env } = await import('cloudflare:test');
+
+    await createEvent('U-alice', 'Alice', { name: '共用卡片活動' });
+
+    // A issues / signs the shared group context (as /list would)
+    const sharedContext = await signLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, 'G-test-group');
+    const payload = decodeLiffContextPayloadUnsafe(sharedContext);
+    expect(Object.keys(payload).sort()).toEqual(['exp', 'g', 'n']);
+    expect(payload).not.toHaveProperty('userId');
+    expect(payload).not.toHaveProperty('sub');
+    expect(payload).not.toHaveProperty('signer');
+
+    const authA = `Bearer test:U-alice:${encodeURIComponent('Alice')}`;
+    const authB = `Bearer test:U-bob:${encodeURIComponent('Bob')}`;
+    expect(authA).not.toBe(authB);
+
+    // A uses the card first
+    const listA = await json<{ events: Array<{ name: string }> }>('/api/events', {
+      headers: {
+        Authorization: authA,
+        'Content-Type': 'application/json',
+        'X-JoyIn-Context': sharedContext,
+      },
+    });
+    expect(listA.status).toBe(200);
+    expect(listA.body.events.some((e) => e.name === '共用卡片活動')).toBe(true);
+
+    // B reuses the same context with a different Authorization — must still work
+    const listB = await json<{ events: Array<{ name: string }> }>('/api/events', {
+      headers: {
+        Authorization: authB,
+        'Content-Type': 'application/json',
+        'X-JoyIn-Context': sharedContext,
+      },
+    });
+    expect(listB.status).toBe(200);
+    expect(listB.body.events.some((e) => e.name === '共用卡片活動')).toBe(true);
+
+    // Different group context cannot see the event
+    const otherContext = await signLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, 'G-other-group');
+    const listOther = await json<{ events: Array<{ name: string }> }>('/api/events', {
+      headers: {
+        Authorization: authB,
+        'Content-Type': 'application/json',
+        'X-JoyIn-Context': otherContext,
+      },
+    });
+    expect(listOther.status).toBe(200);
+    expect(listOther.body.events.some((e) => e.name === '共用卡片活動')).toBe(false);
+
+    // B does not need Alice’s user id in headers — only B’s Authorization
+    expect(authB).not.toContain('U-alice');
+    expect(authB).toContain('U-bob');
+  });
+
+  it('rejects context payloads that bind a user id', async () => {
+    const { env } = await import('cloudflare:test');
+    const secret = env.LIFF_CONTEXT_SIGNING_SECRET;
+    const badPayload = {
+      g: 'G-test-group',
+      exp: Date.now() + 60_000,
+      n: 'sharednonce',
+      userId: 'U-alice',
+    };
+    const body = btoa(JSON.stringify(badPayload))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '');
+    const key = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    );
+    const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body));
+    const sigBytes = new Uint8Array(signature);
+    let binary = '';
+    for (const byte of sigBytes) binary += String.fromCharCode(byte);
+    const sig = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+
+    const { status, body: res } = await json<{ error: string }>('/api/events', {
+      headers: {
+        Authorization: 'Bearer test:U-bob:Bob',
+        'Content-Type': 'application/json',
+        'X-JoyIn-Context': `${body}.${sig}`,
+      },
+    });
+    expect(status).toBe(401);
+    expect(res.error).toBe('context_user_binding_error');
+  });
+
   it('creates and lists upcoming events sorted by time', async () => {
     const first = await createEvent('U-lee', 'Lee', {
       name: '較晚的活動',
@@ -367,6 +461,50 @@ describe('organizer permissions', () => {
       headers: await authHeaders('U-amy', 'Amy'),
     });
     expect(memberTransfer.status).toBe(403);
+  });
+
+  it('management stays based on current user even when sharing A’s context token', async () => {
+    const { signLiffContext } = await import('../src/lib/liff-context');
+    const { env } = await import('cloudflare:test');
+    const created = await createEvent('U-lee', 'Lee', { name: '共用 context 權限' });
+    const eventId = created.body.event.eventId;
+    const shared = await signLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, 'G-test-group');
+
+    const bobDetail = await json<{
+      event: { viewer: { isOrganizer: boolean }; organizerLineUserId: string };
+    }>(`/api/events/${eventId}`, {
+      headers: {
+        Authorization: `Bearer test:U-bob:${encodeURIComponent('Bob')}`,
+        'Content-Type': 'application/json',
+        'X-JoyIn-Context': shared,
+      },
+    });
+    expect(bobDetail.status).toBe(200);
+    expect(bobDetail.body.event.viewer.isOrganizer).toBe(false);
+    expect(bobDetail.body.event.organizerLineUserId).toBe('U-lee');
+
+    const bobPatch = await json(`/api/events/${eventId}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer test:U-bob:${encodeURIComponent('Bob')}`,
+        'Content-Type': 'application/json',
+        'X-JoyIn-Context': shared,
+      },
+      body: JSON.stringify({ name: 'Bob 想改', confirmTimeLocationChange: true }),
+    });
+    expect(bobPatch.status).toBe(403);
+
+    const leePatch = await json<{ event: { name: string } }>(`/api/events/${eventId}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer test:U-lee:${encodeURIComponent('Lee')}`,
+        'Content-Type': 'application/json',
+        'X-JoyIn-Context': shared,
+      },
+      body: JSON.stringify({ name: 'Lee 可改', confirmTimeLocationChange: true }),
+    });
+    expect(leePatch.status).toBe(200);
+    expect(leePatch.body.event.name).toBe('Lee 可改');
   });
 
   it('lets the organizer close, edit, transfer and soft-delete', async () => {

@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
@@ -10,9 +10,12 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "isolatedModules": true,
-    "types": ["@cloudflare/vitest-pool-workers"]
+    "isolatedModules": true
   },
-  "include": ["worker/src/**/*.ts", "worker/test/**/*.ts", "shared/**/*.ts", "worker/env.d.ts"],
-  "exclude": ["node_modules", "web", "dist", "dist-worker"]
+  "include": [
+    "worker/src/**/*.ts",
+    "shared/**/*.ts",
+    "worker-configuration.d.ts"
+  ],
+  "exclude": ["node_modules", "web", "dist", "dist-worker", "worker/test"]
 }

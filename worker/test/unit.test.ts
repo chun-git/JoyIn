@@ -156,6 +156,59 @@ describe('LIFF context token', () => {
     });
   });
 
+  it('payload contains only groupId, expiry, nonce — no user binding', async () => {
+    const { signLiffContext, decodeLiffContextPayloadUnsafe, verifyLiffContext } = await import(
+      '../src/lib/liff-context'
+    );
+    const token = await signLiffContext('unit-secret', 'CgroupShared');
+    const payload = decodeLiffContextPayloadUnsafe(token);
+    expect(Object.keys(payload).sort()).toEqual(['exp', 'g', 'n']);
+    expect(payload).not.toHaveProperty('u');
+    expect(payload).not.toHaveProperty('userId');
+    expect(payload).not.toHaveProperty('sub');
+    expect(payload).not.toHaveProperty('signer');
+    // Same token verifies repeatedly (not one-time)
+    await expect(verifyLiffContext('unit-secret', token)).resolves.toMatchObject({
+      groupId: 'CgroupShared',
+    });
+    await expect(verifyLiffContext('unit-secret', token)).resolves.toMatchObject({
+      groupId: 'CgroupShared',
+    });
+  });
+
+  it('rejects user-bound payloads with context_user_binding_error', async () => {
+    const { verifyLiffContext, LiffContextError } = await import('../src/lib/liff-context');
+    const secret = 'unit-secret';
+    const badPayload = {
+      g: 'Cgroup123',
+      exp: Date.now() + 60_000,
+      n: 'nonceabc',
+      userId: 'U-should-not-bind',
+    };
+    const body = btoa(JSON.stringify(badPayload))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '');
+    const key = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    );
+    const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body));
+    const sigBytes = new Uint8Array(signature);
+    let binary = '';
+    for (const byte of sigBytes) binary += String.fromCharCode(byte);
+    const sig = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    const token = `${body}.${sig}`;
+
+    await expect(verifyLiffContext(secret, token)).rejects.toMatchObject({
+      code: 'context_user_binding_error',
+    });
+    await expect(verifyLiffContext(secret, token)).rejects.toBeInstanceOf(LiffContextError);
+  });
+
   it('describeLiffUrlSafe omits token and full URI', async () => {
     const { buildLiffUrlWithContext, describeLiffUrlSafe } = await import('../src/lib/liff-context');
     const token = 'payload.signature';

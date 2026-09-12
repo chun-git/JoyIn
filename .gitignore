@@ -28,3 +28,4 @@ coverage/
 
 # typescript
 *.tsbuildinfo
+worker-configuration.d.ts

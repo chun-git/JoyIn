@@ -25,4 +25,17 @@ describe('web auth-token helpers', () => {
     expect(buildAuthorizationHeader(VALID_JWT)).toBe(`Bearer ${VALID_JWT}`);
     expect(buildAuthorizationHeader(VALID_JWT).match(/Bearer/gi)?.length).toBe(1);
   });
+
+  it('does not use localStorage for Authorization or ID Token helpers', () => {
+    // Guard: auth helpers are pure string transforms — no browser storage side effects.
+    expect(typeof localStorage).toBe('object');
+    const before = localStorage.length;
+    buildAuthorizationHeader(VALID_JWT);
+    requireLiffIdToken(VALID_JWT);
+    describeIdTokenSafe(VALID_JWT);
+    expect(localStorage.length).toBe(before);
+    expect(localStorage.getItem('Authorization')).toBeNull();
+    expect(localStorage.getItem('idToken')).toBeNull();
+    expect(localStorage.getItem('joyin_liff_context')).toBeNull();
+  });
 });

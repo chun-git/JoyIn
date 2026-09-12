@@ -6,9 +6,15 @@ import { EventCard } from '../components/EventCard';
 import { StateBlock } from '../components/StateBlock';
 import { SiteNav } from '../components/SiteNav';
 import { CONTEXT_INVALID_MESSAGE, CONTEXT_MISSING_MESSAGE } from '../liff-context';
-import type { LiffSession } from '../liff';
+import type { JoyInFlowPhase, LiffSession } from '../liff';
 
-export function EventListPage({ session }: { session: LiffSession }) {
+export function EventListPage({
+  session,
+  onFlowPhase,
+}: {
+  session: LiffSession;
+  onFlowPhase?: (phase: JoyInFlowPhase) => void;
+}) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const showDiag = searchParams.get('diag') === '1';
@@ -24,16 +30,19 @@ export function EventListPage({ session }: { session: LiffSession }) {
     setError('');
     setErrorTitle('無法載入活動');
     setListStatus(null);
+    onFlowPhase?.('loading_events');
     api
       .listEvents(session)
       .then((result) => {
         if (!cancelled) {
           setEvents(Array.isArray(result.events) ? result.events : []);
           setListStatus(200);
+          onFlowPhase?.('ready');
         }
       })
       .catch((err: Error) => {
         if (!cancelled) {
+          onFlowPhase?.('failed');
           const status =
             err instanceof ApiError
               ? err.status
@@ -45,11 +54,12 @@ export function EventListPage({ session }: { session: LiffSession }) {
             const code = err instanceof ApiError ? err.code : '';
             const apiMessage = err instanceof ApiError ? err.message : err.message;
             if (code.startsWith('context_')) {
+              // Group context errors — not "wrong person"; any member with a valid card may open.
               setErrorTitle(code === 'context_missing' ? CONTEXT_MISSING_MESSAGE : CONTEXT_INVALID_MESSAGE);
               setError(
                 code === 'context_missing'
                   ? apiMessage
-                  : `驗證失敗（${code}）。請回到 LINE 群組重新輸入 /list，並從新的活動卡片開啟。`,
+                  : `群組連結驗證失敗（${code}）。請回到 LINE 群組重新輸入 /list，並從新的活動卡片開啟。`,
               );
             } else if (
               code === 'auth_token_missing' ||
@@ -57,7 +67,9 @@ export function EventListPage({ session }: { session: LiffSession }) {
               code === 'auth_token_invalid'
             ) {
               setErrorTitle('無法驗證登入身分');
-              setError(`${apiMessage}${code ? `（${code}）` : ''}`);
+              setError(
+                `${apiMessage}${code ? `（${code}）` : ''}。請確認以自己的 LINE 帳號登入（每位成員各自授權，無需使用他人身分）。`,
+              );
             } else if (apiMessage.includes('失效') || apiMessage.includes('/list')) {
               setErrorTitle(CONTEXT_INVALID_MESSAGE);
               setError(apiMessage);
@@ -80,7 +92,7 @@ export function EventListPage({ session }: { session: LiffSession }) {
     return () => {
       cancelled = true;
     };
-  }, [session]);
+  }, [session, onFlowPhase]);
 
   const sorted = useMemo(
     () => [...events].sort((a, b) => a.startAt.localeCompare(b.startAt)),

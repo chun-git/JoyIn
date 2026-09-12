@@ -1,8 +1,16 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation, Link } from 'react-router-dom';
 import { StateBlock } from './components/StateBlock';
 import { SiteNav } from './components/SiteNav';
-import { initSession, CONTEXT_MISSING_MESSAGE, type LiffSession } from './liff';
+import {
+  CONTEXT_MISSING_MESSAGE,
+  initSession,
+  retryInitSession,
+  startManualLineLogin,
+  type JoyInFlowPhase,
+  type LiffBootResult,
+  type LiffSession,
+} from './liff';
 import { EventCreatePage } from './pages/EventCreatePage';
 import { EventDetailPage } from './pages/EventDetailPage';
 import { EventEditPage } from './pages/EventEditPage';
@@ -10,8 +18,34 @@ import { EventListPage } from './pages/EventListPage';
 import { HelpPage } from './pages/HelpPage';
 import { TransferInvitePage } from './pages/TransferInvitePage';
 
+/** If login redirect does not navigate away, leave redirecting UI after this delay. */
+export const LIFF_REDIRECT_STUCK_MS = 8_000;
+
 function isHelpPath(pathname: string): boolean {
   return pathname === '/help' || pathname.startsWith('/help/');
+}
+
+function phaseLabel(phase: JoyInFlowPhase): string {
+  switch (phase) {
+    case 'preserving_context':
+      return '正在保存群組連結…';
+    case 'initializing_liff':
+      return '正在連接 LINE…';
+    case 'login_required':
+      return '需要登入 LINE';
+    case 'redirecting_login':
+      return '正在前往 LINE 登入…';
+    case 'retrieving_id_token':
+      return '正在確認登入身分…';
+    case 'loading_events':
+      return '正在載入活動…';
+    case 'ready':
+      return '就緒';
+    case 'failed':
+      return '無法開啟 JoyIn';
+    default:
+      return '正在連接 LINE…';
+  }
 }
 
 function GroupGate({
@@ -41,36 +75,98 @@ function GroupGate({
 
 function LiffApp() {
   const [session, setSession] = useState<LiffSession | null>(null);
+  const [phase, setPhase] = useState<JoyInFlowPhase>('idle');
   const [bootError, setBootError] = useState('');
+  const [canRetryLogin, setCanRetryLogin] = useState(false);
+  const [booting, setBooting] = useState(true);
+  const bootGenRef = useRef(0);
 
-  const boot = useCallback(() => {
-    initSession()
-      .then((current) => setSession(current))
-      .catch((err: Error) => {
-        if (err.message !== 'REDIRECTING') {
-          setBootError(err.message);
-        }
-      });
+  const applyResult = useCallback((result: LiffBootResult, gen: number) => {
+    if (gen !== bootGenRef.current) return;
+    setPhase(result.phase);
+    if (result.status === 'ready' && result.session) {
+      setSession(result.session);
+      setBootError('');
+      setCanRetryLogin(false);
+      setBooting(false);
+      return;
+    }
+    if (result.status === 'redirecting') {
+      // Explicit redirect copy — never keep「正在連接 LINE…」
+      setSession(null);
+      setBootError('');
+      setCanRetryLogin(false);
+      setBooting(false);
+      setPhase('redirecting_login');
+      return;
+    }
+    // failed
+    setSession(null);
+    setBootError(result.error?.message || '無法開啟 JoyIn');
+    setCanRetryLogin(Boolean(result.canRetryLogin));
+    setBooting(false);
   }, []);
 
+  const boot = useCallback(
+    (mode: 'auto' | 'retry' | 'manualLogin' = 'auto') => {
+      const gen = ++bootGenRef.current;
+      setBooting(true);
+      setBootError('');
+      setCanRetryLogin(false);
+      setPhase(mode === 'manualLogin' ? 'login_required' : 'preserving_context');
+
+      const onPhase = (next: JoyInFlowPhase) => {
+        if (gen !== bootGenRef.current) return;
+        setPhase(next);
+      };
+      const run =
+        mode === 'manualLogin'
+          ? startManualLineLogin({ onPhase })
+          : mode === 'retry'
+            ? retryInitSession({ onPhase })
+            : initSession({ onPhase });
+
+      run
+        .then((result) => applyResult(result, gen))
+        .catch((err: Error) => {
+          if (gen !== bootGenRef.current) return;
+          setBooting(false);
+          setPhase('failed');
+          setBootError(err.message || '無法開啟 JoyIn');
+          setCanRetryLogin(true);
+        });
+    },
+    [applyResult],
+  );
+
   useEffect(() => {
-    boot();
+    boot('auto');
   }, [boot]);
+
+  // If login redirect never navigates away, leave redirecting UI after 8s.
+  useEffect(() => {
+    if (phase !== 'redirecting_login' || bootError) return;
+    const timer = window.setTimeout(() => {
+      setPhase('login_required');
+      setBootError('登入導向逾時，頁面未離開。請點「重新登入 LINE」再試一次。');
+      setCanRetryLogin(true);
+      setBooting(false);
+    }, LIFF_REDIRECT_STUCK_MS);
+    return () => window.clearTimeout(timer);
+  }, [phase, bootError]);
 
   if (bootError) {
     return (
       <div className="app-shell">
-        <StateBlock kind="error" title="無法開啟 JoyIn">
+        <StateBlock kind="error" title={phaseLabel(phase === 'login_required' ? 'login_required' : 'failed')}>
           {bootError}
           <div className="row" style={{ marginTop: 12, justifyContent: 'center' }}>
-            <button
-              className="btn"
-              type="button"
-              onClick={() => {
-                setBootError('');
-                boot();
-              }}
-            >
+            {canRetryLogin ? (
+              <button className="btn" type="button" onClick={() => boot('manualLogin')}>
+                重新登入 LINE
+              </button>
+            ) : null}
+            <button className="btn secondary" type="button" onClick={() => boot('retry')}>
               重試
             </button>
             <Link to="/help" className="btn secondary">
@@ -82,10 +178,25 @@ function LiffApp() {
     );
   }
 
-  if (!session) {
+  if (phase === 'redirecting_login') {
     return (
       <div className="app-shell">
-        <StateBlock kind="loading" title="正在連接 LINE…" />
+        <StateBlock kind="loading" title="正在前往 LINE 登入…">
+          若沒有自動跳轉，請稍候或點下方按鈕手動重試。
+          <div className="row" style={{ marginTop: 12, justifyContent: 'center' }}>
+            <button className="btn" type="button" onClick={() => boot('manualLogin')}>
+              重新登入 LINE
+            </button>
+          </div>
+        </StateBlock>
+      </div>
+    );
+  }
+
+  if (booting || !session) {
+    return (
+      <div className="app-shell">
+        <StateBlock kind="loading" title={phaseLabel(phase === 'idle' ? 'initializing_liff' : phase)} />
       </div>
     );
   }
@@ -98,7 +209,7 @@ function LiffApp() {
           path="/"
           element={
             <GroupGate session={session}>
-              <EventListPage session={session} />
+              <EventListPage session={session} onFlowPhase={setPhase} />
             </GroupGate>
           }
         />

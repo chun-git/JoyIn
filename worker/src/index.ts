@@ -22,7 +22,7 @@ app.route('/api', api);
 app.post('/webhook/line', async (c) => {
   const rawBody = await c.req.arrayBuffer();
   const signature = c.req.header('X-Line-Signature');
-  const result = await handleLineWebhook(c.env, signature, rawBody);
+  const result = await handleLineWebhook(c.env, signature ?? null, rawBody);
   if (!result.ok) {
     return c.json({ error: 'UNAUTHORIZED', message: 'LINE 簽章驗證失敗' }, 401);
   }

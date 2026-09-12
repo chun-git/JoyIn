@@ -1,4 +1,4 @@
-import type { EventSummary } from '../../shared/types';
+import type { EventSummary } from '../../../shared/types';
 
 export interface LineFlexMessage {
   type: 'flex';

@@ -4,9 +4,15 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import App from './App';
 
-vi.mock('./liff', () => ({
-  initSession: vi.fn(() => new Promise(() => undefined)),
-}));
+vi.mock('./liff', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./liff')>();
+  return {
+    ...actual,
+    initSession: vi.fn(() => new Promise(() => undefined)),
+    retryInitSession: vi.fn(() => new Promise(() => undefined)),
+    startManualLineLogin: vi.fn(() => new Promise(() => undefined)),
+  };
+});
 
 function renderHelp(path: string) {
   return render(

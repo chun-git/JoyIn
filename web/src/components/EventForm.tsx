@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { CreateEventInput } from '../../../shared/types';
 import { addOneMinute, taipeiParts, validateEventSchedule } from '@shared/datetime';
-import { InlineHint } from './InlineHint';
 
 export function EventForm({
   initial,

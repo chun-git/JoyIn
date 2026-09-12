@@ -120,17 +120,58 @@ function safeStorageRemove(storage: StorageLike | undefined, key: string): void 
 }
 
 /**
+ * Read expiry (ms) from an unsigned context payload for client-side freshness checks.
+ * Never logs or returns groupId.
+ */
+export function readContextExpiryMs(token: string): number | null {
+  const trimmed = token.trim();
+  if (!isJoyInContextTokenFormat(trimmed)) return null;
+  try {
+    const [body] = trimmed.split('.');
+    const padded = body.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = padded.length % 4 === 0 ? '' : '='.repeat(4 - (padded.length % 4));
+    const json = JSON.parse(atob(padded + pad)) as { exp?: unknown };
+    return typeof json.exp === 'number' && Number.isFinite(json.exp) ? json.exp : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isContextTokenExpired(token: string, nowMs = Date.now()): boolean {
+  const exp = readContextExpiryMs(token);
+  // Only drop when expiry is known and past. Undecodable payloads are left for the API.
+  if (exp == null) return false;
+  return exp <= nowMs;
+}
+
+function acceptContextToken(
+  token: string,
+  storage: StorageLike | undefined,
+  nowMs: number,
+): string {
+  if (!token || !isJoyInContextTokenFormat(token)) return '';
+  if (isContextTokenExpired(token, nowMs)) {
+    safeStorageRemove(storage, JOYIN_CONTEXT_STORAGE_KEY);
+    return '';
+  }
+  return token;
+}
+
+/**
  * Persist context from the current page URL before `liff.init()`.
- * Does not mutate location / LIFF query parameters.
+ * A new /list context always overwrites any previous stored context.
+ * Expired tokens are discarded.
  */
 export function preserveJoyInContextBeforeInit(options?: {
   search?: string;
   storage?: StorageLike;
+  nowMs?: number;
 }): string {
   const search = options?.search ?? (typeof window !== 'undefined' ? window.location.search : '');
   const storage =
     options?.storage ??
     (typeof window !== 'undefined' ? window.sessionStorage : undefined);
+  const nowMs = options?.nowMs ?? Date.now();
 
   const fromSearch = contextFromSearchParams(search);
   const liffState = (() => {
@@ -141,29 +182,42 @@ export function preserveJoyInContextBeforeInit(options?: {
     }
   })();
   const fromState = contextFromLiffState(liffState);
-  const token = fromSearch || fromState;
+  const token = acceptContextToken(fromSearch || fromState, storage, nowMs);
   if (token) {
+    // New card context overwrites any previous group context in this browser session.
     safeStorageSet(storage, JOYIN_CONTEXT_STORAGE_KEY, token);
+  } else {
+    // Drop expired / invalid tokens left in storage when opening without a fresh context.
+    const stored = safeStorageGet(storage, JOYIN_CONTEXT_STORAGE_KEY);
+    if (stored && isContextTokenExpired(stored, nowMs)) {
+      safeStorageRemove(storage, JOYIN_CONTEXT_STORAGE_KEY);
+    }
   }
   return token;
 }
 
 /**
  * Resolve signed JoyIn context token after LIFF is ready.
- * Order: location.search → liff.state → sessionStorage (cleared after restore).
+ * Order: location.search → liff.state → sessionStorage.
+ *
+ * New URL context always overwrites storage. Expired tokens are cleared.
+ * Never use localStorage for context or Authorization.
  */
 export function getJoyInContextToken(options?: {
   search?: string;
   storage?: StorageLike;
+  /** When true, remove sessionStorage after reading from it. Default false. */
   clearStorageOnRestore?: boolean;
+  nowMs?: number;
 }): JoyInContextResult {
   const search = options?.search ?? (typeof window !== 'undefined' ? window.location.search : '');
   const storage =
     options?.storage ??
     (typeof window !== 'undefined' ? window.sessionStorage : undefined);
-  const clearStorageOnRestore = options?.clearStorageOnRestore !== false;
+  const clearStorageOnRestore = options?.clearStorageOnRestore === true;
+  const nowMs = options?.nowMs ?? Date.now();
 
-  const fromSearch = contextFromSearchParams(search);
+  const fromSearch = acceptContextToken(contextFromSearchParams(search), storage, nowMs);
   if (fromSearch) {
     safeStorageSet(storage, JOYIN_CONTEXT_STORAGE_KEY, fromSearch);
     return { token: fromSearch, source: 'search' };
@@ -176,14 +230,15 @@ export function getJoyInContextToken(options?: {
       return null;
     }
   })();
-  const fromState = contextFromLiffState(liffState);
+  const fromState = acceptContextToken(contextFromLiffState(liffState), storage, nowMs);
   if (fromState) {
     safeStorageSet(storage, JOYIN_CONTEXT_STORAGE_KEY, fromState);
     return { token: fromState, source: 'liff.state' };
   }
 
-  const stored = safeStorageGet(storage, JOYIN_CONTEXT_STORAGE_KEY);
-  if (stored && isJoyInContextTokenFormat(stored)) {
+  const storedRaw = safeStorageGet(storage, JOYIN_CONTEXT_STORAGE_KEY);
+  const stored = acceptContextToken(storedRaw, storage, nowMs);
+  if (stored) {
     if (clearStorageOnRestore) {
       safeStorageRemove(storage, JOYIN_CONTEXT_STORAGE_KEY);
     }

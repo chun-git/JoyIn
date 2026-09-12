@@ -1,4 +1,4 @@
-import type { RegistrationRecord, RegistrationStatus, RegistrationType } from '../../shared/types';
+import type { RegistrationRecord, RegistrationStatus, RegistrationType } from '../../../shared/types';
 
 export function newId(): string {
   return crypto.randomUUID();

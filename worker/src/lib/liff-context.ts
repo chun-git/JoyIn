@@ -9,14 +9,43 @@ export type LiffContextErrorCode =
   | 'context_expired'
   | 'context_signature_mismatch'
   | 'context_payload_invalid'
-  | 'context_secret_missing';
+  | 'context_secret_missing'
+  /** Payload illegally binds a LINE user / signer — group context must not do this */
+  | 'context_user_binding_error';
+
+/** Only these keys are allowed in a group context payload. */
+export const LIFF_CONTEXT_ALLOWED_KEYS = ['g', 'exp', 'n'] as const;
+
+/**
+ * Keys that would bind the token to a person. Presence → context_user_binding_error.
+ * Group context represents the LINE group only; never the /list issuer.
+ */
+export const LIFF_CONTEXT_USER_BINDING_KEYS = [
+  'u',
+  'uid',
+  'user',
+  'userId',
+  'user_id',
+  'lineUserId',
+  'line_user_id',
+  'sub',
+  'signer',
+  'createdBy',
+  'created_by',
+  'owner',
+  'issuer',
+  'iss',
+] as const;
 
 export interface LiffContextPayload {
-  /** LINE Messaging API groupId (C…) */
+  /** LINE Messaging API groupId (C…) — group context, not a user */
   g: string;
   /** Expiry epoch milliseconds */
   exp: number;
-  /** Nonce — must be present and non-empty */
+  /**
+   * Nonce for uniqueness / anti-tamper entropy.
+   * NOT a one-time ticket — the same token may be reused by any group member until exp.
+   */
   n: string;
 }
 
@@ -191,12 +220,15 @@ export async function verifyLiffContext(
     throw new LiffContextError('context_signature_mismatch', 'invalid signature');
   }
 
-  let payload: LiffContextPayload;
+  let raw: unknown;
   try {
-    payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(body))) as LiffContextPayload;
+    raw = JSON.parse(new TextDecoder().decode(base64UrlToBytes(body)));
   } catch {
     throw new LiffContextError('context_payload_invalid', 'invalid payload');
   }
+
+  assertGroupOnlyContextPayload(raw);
+  const payload = raw as LiffContextPayload;
 
   if (typeof payload.g !== 'string' || !payload.g.trim()) {
     throw new LiffContextError('context_payload_invalid', 'missing groupId');
@@ -211,9 +243,63 @@ export async function verifyLiffContext(
     throw new LiffContextError('context_expired', 'token expired');
   }
 
+  // Intentionally does NOT accept or compare any userId / signer.
+  // Authorization (current user) is verified separately from X-JoyIn-Context (group).
   return {
     groupId: payload.g.trim(),
     expiresAt: payload.exp,
     nonce: payload.n,
   };
+}
+
+/**
+ * Ensure the payload is group-scoped only.
+ * Rejects any user-binding fields so a shared /list card works for every member.
+ */
+export function assertGroupOnlyContextPayload(raw: unknown): asserts raw is LiffContextPayload {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new LiffContextError('context_payload_invalid', 'invalid payload');
+  }
+  const record = raw as Record<string, unknown>;
+  const keys = Object.keys(record);
+  const allowed = new Set<string>(LIFF_CONTEXT_ALLOWED_KEYS);
+  const userBinding = new Set<string>(LIFF_CONTEXT_USER_BINDING_KEYS);
+
+  for (const key of keys) {
+    const lower = key.toLowerCase();
+    if (
+      userBinding.has(key) ||
+      lower.includes('userid') ||
+      lower.includes('user_id') ||
+      lower === 'signer' ||
+      lower === 'sub'
+    ) {
+      throw new LiffContextError(
+        'context_user_binding_error',
+        'context token must not bind to a user',
+      );
+    }
+    if (!allowed.has(key)) {
+      throw new LiffContextError('context_payload_invalid', 'unexpected payload field');
+    }
+  }
+}
+
+/** Decode payload JSON without verifying signature — tests / diagnostics only. */
+export function decodeLiffContextPayloadUnsafe(token: string): Record<string, unknown> {
+  const trimmed = token.trim();
+  if (!isLiffContextTokenFormat(trimmed)) {
+    throw new LiffContextError('context_malformed', 'invalid token format');
+  }
+  const [body] = trimmed.split('.');
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(base64UrlToBytes(body))) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new LiffContextError('context_payload_invalid', 'invalid payload');
+    }
+    return parsed as Record<string, unknown>;
+  } catch (err) {
+    if (err instanceof LiffContextError) throw err;
+    throw new LiffContextError('context_payload_invalid', 'invalid payload');
+  }
 }
