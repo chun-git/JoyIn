@@ -23,6 +23,15 @@ export class ApiError extends Error {
   }
 }
 
+type AuthExpiredHandler = (error: ApiError) => void;
+
+let authExpiredHandler: AuthExpiredHandler | null = null;
+
+/** Register a single handler for auth_token_expired (auto re-login). */
+export function setAuthTokenExpiredHandler(handler: AuthExpiredHandler | null): void {
+  authExpiredHandler = handler;
+}
+
 async function request<T>(path: string, session: LiffSession, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   // Single Bearer + raw ID Token string — no encodeURIComponent / JSON.stringify / extra quotes.
@@ -41,11 +50,19 @@ async function request<T>(path: string, session: LiffSession, init: RequestInit 
   } & T;
 
   if (!response.ok) {
-    throw new ApiError(
+    const error = new ApiError(
       response.status,
       typeof data.error === 'string' ? data.error : 'ERROR',
       typeof data.message === 'string' ? data.message : '請求失敗',
     );
+    if (error.code === 'auth_token_expired') {
+      try {
+        authExpiredHandler?.(error);
+      } catch {
+        // never block the throw
+      }
+    }
+    throw error;
   }
   return data;
 }

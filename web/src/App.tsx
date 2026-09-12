@@ -2,8 +2,15 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Navigate, Route, Routes, useLocation, Link } from 'react-router-dom';
 import { StateBlock } from './components/StateBlock';
 import { SiteNav } from './components/SiteNav';
+import { setAuthTokenExpiredHandler } from './api';
+import {
+  AUTH_EXPIRED_USER_MESSAGE,
+  AUTH_RECOVERY_FAILED_MESSAGE,
+  recoverFromExpiredIdToken,
+} from './auth-recovery';
 import {
   CONTEXT_MISSING_MESSAGE,
+  getCachedLiff,
   initSession,
   retryInitSession,
   startManualLineLogin,
@@ -80,6 +87,12 @@ function LiffApp() {
   const [canRetryLogin, setCanRetryLogin] = useState(false);
   const [booting, setBooting] = useState(true);
   const bootGenRef = useRef(0);
+  const sessionRef = useRef<LiffSession | null>(null);
+  const recoveringRef = useRef(false);
+
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
 
   const applyResult = useCallback((result: LiffBootResult, gen: number) => {
     if (gen !== bootGenRef.current) return;
@@ -92,7 +105,6 @@ function LiffApp() {
       return;
     }
     if (result.status === 'redirecting') {
-      // Explicit redirect copy — never keep「正在連接 LINE…」
       setSession(null);
       setBootError('');
       setCanRetryLogin(false);
@@ -100,7 +112,6 @@ function LiffApp() {
       setPhase('redirecting_login');
       return;
     }
-    // failed
     setSession(null);
     setBootError(result.error?.message || '無法開啟 JoyIn');
     setCanRetryLogin(Boolean(result.canRetryLogin));
@@ -139,16 +150,59 @@ function LiffApp() {
     [applyResult],
   );
 
+  const runExpiredRecovery = useCallback(
+    async (force = false) => {
+      if (recoveringRef.current && !force) return;
+      recoveringRef.current = true;
+      setPhase('redirecting_login');
+      setBootError('');
+      setCanRetryLogin(false);
+      setBooting(false);
+      // Soft notice while redirecting — not a hard error yet.
+      if (!force) {
+        setPhase('redirecting_login');
+      }
+
+      const status = await recoverFromExpiredIdToken({
+        contextToken: sessionRef.current?.contextToken,
+        liff: getCachedLiff(),
+        force,
+      });
+
+      if (status === 'redirecting') {
+        setPhase('redirecting_login');
+        setBootError('');
+        recoveringRef.current = false;
+        return;
+      }
+
+      recoveringRef.current = false;
+      setPhase('login_required');
+      setBootError(AUTH_RECOVERY_FAILED_MESSAGE);
+      setCanRetryLogin(true);
+      setBooting(false);
+      setSession(null);
+    },
+    [],
+  );
+
   useEffect(() => {
     boot('auto');
   }, [boot]);
+
+  useEffect(() => {
+    setAuthTokenExpiredHandler(() => {
+      void runExpiredRecovery(false);
+    });
+    return () => setAuthTokenExpiredHandler(null);
+  }, [runExpiredRecovery]);
 
   // If login redirect never navigates away, leave redirecting UI after 8s.
   useEffect(() => {
     if (phase !== 'redirecting_login' || bootError) return;
     const timer = window.setTimeout(() => {
       setPhase('login_required');
-      setBootError('登入導向逾時，頁面未離開。請點「重新登入 LINE」再試一次。');
+      setBootError(AUTH_RECOVERY_FAILED_MESSAGE);
       setCanRetryLogin(true);
       setBooting(false);
     }, LIFF_REDIRECT_STUCK_MS);
@@ -158,11 +212,18 @@ function LiffApp() {
   if (bootError) {
     return (
       <div className="app-shell">
-        <StateBlock kind="error" title={phaseLabel(phase === 'login_required' ? 'login_required' : 'failed')}>
+        <StateBlock
+          kind="error"
+          title={
+            bootError.includes('過期') || bootError.includes('重新登入 LINE')
+              ? 'LINE 登入已過期'
+              : phaseLabel(phase === 'login_required' ? 'login_required' : 'failed')
+          }
+        >
           {bootError}
           <div className="row" style={{ marginTop: 12, justifyContent: 'center' }}>
             {canRetryLogin ? (
-              <button className="btn" type="button" onClick={() => boot('manualLogin')}>
+              <button className="btn" type="button" onClick={() => void runExpiredRecovery(true)}>
                 重新登入 LINE
               </button>
             ) : null}
@@ -182,9 +243,9 @@ function LiffApp() {
     return (
       <div className="app-shell">
         <StateBlock kind="loading" title="正在前往 LINE 登入…">
-          若沒有自動跳轉，請稍候或點下方按鈕手動重試。
+          {AUTH_EXPIRED_USER_MESSAGE}
           <div className="row" style={{ marginTop: 12, justifyContent: 'center' }}>
-            <button className="btn" type="button" onClick={() => boot('manualLogin')}>
+            <button className="btn" type="button" onClick={() => void runExpiredRecovery(true)}>
               重新登入 LINE
             </button>
           </div>

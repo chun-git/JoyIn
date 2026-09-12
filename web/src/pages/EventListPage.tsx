@@ -61,15 +61,16 @@ export function EventListPage({
                   ? apiMessage
                   : `群組連結驗證失敗（${code}）。請回到 LINE 群組重新輸入 /list，並從新的活動卡片開啟。`,
               );
+            } else if (code === 'auth_token_expired') {
+              setErrorTitle('LINE 登入已過期');
+              setError('LINE 登入已過期，系統將重新登入。');
             } else if (
               code === 'auth_token_missing' ||
               code === 'auth_token_malformed' ||
               code === 'auth_token_invalid'
             ) {
               setErrorTitle('無法驗證登入身分');
-              setError(
-                `${apiMessage}${code ? `（${code}）` : ''}。請確認以自己的 LINE 帳號登入（每位成員各自授權，無需使用他人身分）。`,
-              );
+              setError('無法驗證登入身分，請重新從群組活動卡片開啟。');
             } else if (apiMessage.includes('失效') || apiMessage.includes('/list')) {
               setErrorTitle(CONTEXT_INVALID_MESSAGE);
               setError(apiMessage);

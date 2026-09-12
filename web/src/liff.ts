@@ -1,3 +1,4 @@
+import { JOYIN_AUTH_RECOVERY_ATTEMPTED_KEY } from './auth-recovery-keys';
 import { buildContextDiag, buildLiffLoginRedirectUri, getJoyInContextToken, preserveJoyInContextBeforeInit, type JoyInContextSource } from './liff-context';
 import { describeIdTokenSafe, requireLiffIdToken } from './auth-token';
 import {
@@ -64,6 +65,7 @@ type LiffLike = {
   isLoggedIn: () => boolean;
   isInClient: () => boolean;
   login: (config?: { redirectUri?: string }) => void;
+  logout?: () => void;
   getIDToken: () => string | null;
   getProfile: () => Promise<{ userId: string; displayName: string }>;
   getOS?: () => string;
@@ -379,6 +381,11 @@ export function retryInitSession(deps: InitSessionDeps = {}): Promise<LiffBootRe
   clearLiffInitFailureCache();
   safeRemoveItem(storage, JOYIN_LOGIN_ATTEMPTED_KEY);
   return initSession(deps);
+}
+
+/** Return the LIFF instance from a successful init (for expired-token recovery). */
+export function getCachedLiff(): LiffLike | null {
+  return cachedLiff;
 }
 
 async function runBoot(deps: InitSessionDeps, attempt: number): Promise<LiffBootResult> {
@@ -699,5 +706,6 @@ export function startManualLineLogin(deps: InitSessionDeps = {}): Promise<LiffBo
   const storage = getSessionStorage(deps.storage);
   clearLiffInitFailureCache();
   safeRemoveItem(storage, JOYIN_LOGIN_ATTEMPTED_KEY);
+  safeRemoveItem(storage, JOYIN_AUTH_RECOVERY_ATTEMPTED_KEY);
   return initSession({ ...deps, forceLogin: true });
 }

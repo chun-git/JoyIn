@@ -4,7 +4,8 @@ export const ID_TOKEN_JWT_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$
 export type AuthTokenErrorCode =
   | 'auth_token_missing'
   | 'auth_token_malformed'
-  | 'auth_token_invalid';
+  | 'auth_token_invalid'
+  | 'auth_token_expired';
 
 export function describeIdTokenSafe(token: string): {
   present: boolean;

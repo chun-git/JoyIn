@@ -56,6 +56,32 @@ function lineVerifyErrorMessage(data: LineVerifyResponse | null): string {
   return 'LIFF 身分驗證失敗';
 }
 
+/** Classify LINE verify failures. Never return raw LINE text to end users. */
+export function classifyLineVerifyFailure(data: LineVerifyResponse | null): {
+  code: 'auth_token_expired' | 'auth_token_invalid';
+  message: string;
+  lineError: string;
+} {
+  const lineError = lineVerifyErrorMessage(data);
+  const normalized = lineError.toLowerCase().replace(/\s+/g, ' ');
+  if (
+    normalized.includes('idtoken expired') ||
+    normalized.includes('id token expired') ||
+    /\btoken expired\b/.test(normalized)
+  ) {
+    return {
+      code: 'auth_token_expired',
+      message: 'LINE 登入已過期',
+      lineError,
+    };
+  }
+  return {
+    code: 'auth_token_invalid',
+    message: '無法驗證登入身分',
+    lineError,
+  };
+}
+
 export async function verifyLiffIdToken(
   idToken: string,
   channelId: string,
@@ -111,15 +137,15 @@ export async function verifyLiffIdToken(
 
   const sub = typeof data?.sub === 'string' ? data.sub.trim() : '';
   if (!response.ok || !sub) {
-    const desc = lineVerifyErrorMessage(data);
+    const classified = classifyLineVerifyFailure(data);
     console.error('[JoyIn auth]', {
-      reason: 'auth_token_invalid',
+      reason: classified.code,
       ...describeIdTokenSafe(idToken),
       hasChannelId: true,
       httpStatus: response.status,
-      lineError: desc.slice(0, 80),
+      lineError: classified.lineError.slice(0, 80),
     });
-    throw new AppError(401, 'auth_token_invalid', desc);
+    throw new AppError(401, classified.code, classified.message);
   }
 
   const displayName =
