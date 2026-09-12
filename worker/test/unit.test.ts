@@ -134,16 +134,22 @@ describe('LIFF context token', () => {
     await expect(verifyLiffContext('unit-secret', 'not-a-token')).rejects.toMatchObject({
       code: 'context_malformed',
     });
-    expect(buildLiffUrlWithContext('https://joyin-web.pages.dev', 'tok.en')).toContain('context=tok.en');
-    const flexUrl = buildLiffUrlWithContext('https://joyin-web.pages.dev', 'tok.en');
-    // Flex cards use Endpoint URL, not liff.line.me (avoids LIFF-browser login 400)
-    expect(flexUrl.startsWith('https://joyin-web.pages.dev')).toBe(true);
+    expect(buildLiffUrlWithContext('https://liff.line.me/test-liff-id', 'tok.en')).toContain(
+      'context=tok.en',
+    );
+    const flexUrl = buildLiffUrlWithContext('https://liff.line.me/test-liff-id', 'tok.en');
+    // Flex cards must open via liff.line.me so LIFF Browser sets isInClient()
+    expect(flexUrl.startsWith('https://liff.line.me/')).toBe(true);
+    expect(flexUrl).not.toContain('joyin-web.pages.dev');
     expect(flexUrl).not.toContain('liff.state=');
-    expect(flexUrl).not.toContain('liff.line.me');
+    expect(flexUrl).not.toContain('external=true');
     const parsed = new URL(flexUrl);
     expect(parsed.searchParams.get('context')).toBe('tok.en');
     expect(parsed.searchParams.get('liff.state')).toBeNull();
     expect(flexUrl).not.toMatch(/groupId=/i);
+    expect(() => buildLiffUrlWithContext('https://joyin-web.pages.dev', 'tok.en')).toThrow(
+      /liff\.line\.me/,
+    );
   });
 
   it('same secret signs and verifies; expired returns context_expired', async () => {
@@ -212,7 +218,7 @@ describe('LIFF context token', () => {
   it('describeLiffUrlSafe omits token and full URI', async () => {
     const { buildLiffUrlWithContext, describeLiffUrlSafe } = await import('../src/lib/liff-context');
     const token = 'payload.signature';
-    const url = buildLiffUrlWithContext('https://joyin-web.pages.dev', token);
+    const url = buildLiffUrlWithContext('https://liff.line.me/test-liff-id', token);
     const safe = await describeLiffUrlSafe(url, token);
     expect(safe.hasContext).toBe(true);
     expect(safe.hasLiffState).toBe(false);

@@ -110,25 +110,48 @@ async function hmacSha256Base64Url(secret: string, message: string): Promise<str
 }
 
 /**
- * Build the URL embedded in Flex cards.
+ * Build a Flex-card URI that opens JoyIn inside the LIFF browser.
  *
- * Prefer the LIFF Endpoint URL (Pages origin) with `?context=…`, not
- * `https://liff.line.me/{id}/?context=…`.
+ * Must use `https://liff.line.me/<LIFF_ID>?context=…` (LIFF_URL).
+ * Do NOT use the Pages Endpoint URL (`joyin-web.pages.dev`) as the card URI —
+ * that opens outside LIFF so `liff.isInClient()` is false.
  *
- * Opening via liff.line.me puts first-time users in the LIFF browser, where
- * `liff.login()` is unsupported and commonly returns HTTP 400. Opening the
- * Endpoint URL uses LINE's in-app / external browser where login works.
+ * Endpoint URL remains Pages for LINE Developers Console only.
+ * Uses URL / URLSearchParams so context is correctly encoded.
  */
 export function buildLiffUrlWithContext(baseUrl: string, contextToken: string): string {
   const url = new URL(baseUrl);
+  if (url.protocol !== 'https:' || url.hostname !== 'liff.line.me') {
+    throw new Error('Flex LIFF URI base must be https://liff.line.me/<LIFF_ID>');
+  }
+  if (!url.pathname || url.pathname === '/') {
+    throw new Error('Flex LIFF URI base must include a LIFF ID path');
+  }
   url.search = '';
   url.hash = '';
-  // Endpoint roots are typically `/`; keep existing path if present.
-  if (!url.pathname || url.pathname === '') {
-    url.pathname = '/';
-  }
+  // Normalize trailing slash on path — LIFF IDs work with or without; keep path as-is minus empty.
   url.searchParams.set('context', contextToken);
-  return url.toString();
+  const result = url.toString();
+  if (result.includes('external=true') || result.includes('external%3Dtrue')) {
+    throw new Error('Flex LIFF URI must not include external=true');
+  }
+  return result;
+}
+
+/** True when a URI is a valid in-client LIFF Flex link (not Pages Endpoint). */
+export function isFlexLiffUri(uri: string): boolean {
+  try {
+    const url = new URL(uri);
+    return (
+      url.protocol === 'https:' &&
+      url.hostname === 'liff.line.me' &&
+      Boolean(url.pathname && url.pathname !== '/') &&
+      Boolean(url.searchParams.get('context')) &&
+      !url.searchParams.has('external')
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Safe flex URL diagnostics — never includes token or full URI. */

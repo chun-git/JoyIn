@@ -98,9 +98,29 @@ export async function handleLineWebhook(
     // Official group key = webhook source.groupId only
     const upcoming = await listEvents(env.DB, groupId, 5);
     const contextToken = await signLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, groupId);
-    // Flex URI = Endpoint URL + context (not liff.line.me) so first-time login works.
-    const endpoint = (env.LIFF_ENDPOINT_URL || 'https://joyin-web.pages.dev').replace(/\/$/, '');
-    const liffUrl = buildLiffUrlWithContext(endpoint, contextToken);
+    // Flex URI must open via liff.line.me so LIFF Browser sets isInClient() === true.
+    // Endpoint URL (Pages) is only for LINE Developers Console — never as card URI.
+    const liffBase = (env.LIFF_URL || '').trim();
+    if (!liffBase) {
+      console.error('LIFF_URL is not configured; cannot reply to /list');
+      continue;
+    }
+    let liffUrl: string;
+    try {
+      liffUrl = buildLiffUrlWithContext(liffBase, contextToken);
+    } catch (err) {
+      console.error('[JoyIn /list flex] invalid LIFF_URL base', {
+        message: err instanceof Error ? err.message : 'invalid',
+        hostHint: (() => {
+          try {
+            return new URL(liffBase).hostname;
+          } catch {
+            return 'unparseable';
+          }
+        })(),
+      });
+      continue;
+    }
     const safe = await describeLiffUrlSafe(liffUrl, contextToken);
     // Decode payload fields for safe diagnostics only (no groupId / token values)
     let hasExpiresAt = false;
@@ -117,6 +137,13 @@ export async function handleLineWebhook(
     }
     console.info('[JoyIn /list flex]', {
       tokenSource: 'webhook',
+      uriHost: (() => {
+        try {
+          return new URL(liffUrl).hostname;
+        } catch {
+          return 'invalid';
+        }
+      })(),
       hasContext: safe.hasContext,
       hasLiffState: safe.hasLiffState,
       tokenLength: safe.tokenLength,
@@ -132,6 +159,16 @@ export async function handleLineWebhook(
         formatOk: safe.formatOk,
         urlLength: safe.urlLength,
       });
+      continue;
+    }
+    try {
+      const host = new URL(liffUrl).hostname;
+      if (host !== 'liff.line.me' || liffUrl.includes('external=true')) {
+        console.error('[JoyIn /list flex] refusing non-LIFF card URI', { host });
+        continue;
+      }
+    } catch {
+      console.error('[JoyIn /list flex] unparseable card URI');
       continue;
     }
     const flex = buildEventCarousel(upcoming, liffUrl);

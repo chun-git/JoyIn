@@ -105,12 +105,15 @@ describe('events API', () => {
     );
     const { env } = await import('cloudflare:test');
     const original = await signLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, 'G-test-group');
-    const flexUrl = buildLiffUrlWithContext('https://joyin-web.pages.dev', original);
+    const flexUrl = buildLiffUrlWithContext('https://liff.line.me/test-liff-id', original);
     const parsed = new URL(flexUrl);
     const fromQuery = parsed.searchParams.get('context') || '';
     expect(fromQuery).toBe(original);
-    expect(parsed.origin).toBe('https://joyin-web.pages.dev');
+    expect(parsed.origin).toBe('https://liff.line.me');
+    expect(parsed.hostname).toBe('liff.line.me');
     expect(parsed.searchParams.get('liff.state')).toBeNull();
+    expect(flexUrl).not.toContain('joyin-web.pages.dev');
+    expect(flexUrl).not.toContain('external=true');
     await expect(verifyLiffContext(env.LIFF_CONTEXT_SIGNING_SECRET, fromQuery)).resolves.toMatchObject({
       groupId: 'G-test-group',
     });
@@ -1018,8 +1021,9 @@ describe('LINE webhook', () => {
       expect(replies.length).toBe(1);
       const serialized = JSON.stringify(replies[0]);
       expect(serialized).toContain('context=');
-      expect(serialized).toContain('https://joyin-web.pages.dev/?context=');
-      expect(serialized).not.toContain('liff.line.me');
+      expect(serialized).toContain('https://liff.line.me/test-liff-id');
+      expect(serialized).not.toContain('joyin-web.pages.dev/?context=');
+      expect(serialized).not.toContain('external=true');
 
       const match = serialized.match(/context=([^"&\\]+)/);
       expect(match?.[1]).toBeTruthy();
