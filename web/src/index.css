@@ -279,10 +279,19 @@ button.event-card {
 .modal-backdrop {
   position: fixed;
   inset: 0;
+  z-index: 40;
   background: rgba(20, 48, 46, 0.45);
   display: grid;
-  place-items: center;
+  place-items: end center;
   padding: 16px;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+@media (min-width: 640px) {
+  .modal-backdrop {
+    place-items: center;
+  }
 }
 .modal {
   width: 100%;
@@ -291,6 +300,207 @@ button.event-card {
   background: var(--paper);
   border-radius: 24px;
   padding: 20px;
+  box-sizing: border-box;
+}
+.sheet-modal {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  max-height: min(85vh, 640px);
+  overflow: auto;
+}
+@media (min-width: 640px) {
+  .sheet-modal {
+    border-radius: 24px;
+  }
+}
+.modal-title {
+  margin: 0 0 10px;
+  font-size: 20px;
+  overflow-wrap: anywhere;
+}
+.modal-body {
+  margin: 0 0 16px;
+  color: var(--ink);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.modal-inline-error {
+  padding: 0 0 12px;
+  text-align: left;
+  margin: 0;
+}
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+.modal-actions > * {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.modal-help-list {
+  margin: 0 0 16px;
+  padding-left: 1.2em;
+}
+.modal-help-list li {
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}
+
+.detail-back-row {
+  width: 100%;
+  min-width: 0;
+}
+.btn-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: auto;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: white;
+  color: var(--teal-dark);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.btn-back-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.btn-back:hover {
+  background: var(--bg-accent);
+  border-color: var(--teal);
+}
+.btn-back:active {
+  background: #d9efe6;
+  border-color: var(--teal-dark);
+}
+.btn-back:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.section-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 10px;
+}
+.section-heading h2 {
+  margin: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+}
+.icon-help {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: white;
+  color: var(--teal-dark);
+  font: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.icon-help span {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--bg-accent);
+  font-size: 14px;
+}
+.icon-help:hover {
+  border-color: var(--teal);
+  background: var(--bg-accent);
+}
+.icon-help:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.list-empty {
+  margin: 0;
+  padding: 4px 0 0;
+}
+.list-item-main {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.btn-compact {
+  min-height: 40px;
+  padding: 8px 14px;
+  flex: 0 0 auto;
+}
+.organizer-line {
+  margin: -4px 0 0;
+}
+.registration-panel {
+  min-width: 0;
+}
+.organizer-panel {
+  margin-bottom: 4px;
+}
+.copy-event-footer {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  margin-top: 8px;
+  padding-top: 8px;
+}
+.btn-copy-event {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: white;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  min-height: 40px;
+  padding: 8px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  max-width: 100%;
+}
+.btn-copy-event:hover {
+  background: var(--bg-accent);
+  border-color: var(--teal);
+}
+.btn-copy-event:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+.btn-copy-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.event-detail-page {
+  width: 100%;
+  min-width: 0;
 }
 h1 { margin: 0 0 8px; font-size: 26px; }
 section h2 { margin: 0 0 10px; font-size: 18px; }

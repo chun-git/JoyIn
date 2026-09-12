@@ -1,43 +1,98 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { EventDetail, RegistrationRecord, TransferInviteCreated } from '../../../shared/types';
 import { api } from '../api';
+import { cancelListButtonLabel } from '../cancel-registration-copy';
+import { CancelRegistrationDialog } from '../components/CancelRegistrationDialog';
 import { EventCard } from '../components/EventCard';
 import { InlineHint } from '../components/InlineHint';
+import { JoinHelpSheet } from '../components/JoinHelpSheet';
 import { SiteNav } from '../components/SiteNav';
 import { StateBlock } from '../components/StateBlock';
 import type { LiffSession } from '../liff';
 
+function BackToListButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button className="btn-back" type="button" onClick={onClick}>
+      <span className="btn-back-icon" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <path
+            d="M15 6L9 12l6 6"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </span>
+      <span>返回活動列表</span>
+    </button>
+  );
+}
+
+function CopyEventButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button className="btn btn-copy-event" type="button" onClick={onClick}>
+      <span className="btn-copy-icon" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+          <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
+          <path
+            d="M5 15V5a2 2 0 0 1 2-2h10"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+      </span>
+      <span>複製活動</span>
+    </button>
+  );
+}
+
 function RegistrationList({
   title,
+  emptyLabel,
   items,
-  onCancel,
+  headingExtra,
+  onRequestCancel,
 }: {
   title: string;
+  emptyLabel: string;
   items: RegistrationRecord[];
-  onCancel: (registration: RegistrationRecord) => void;
+  headingExtra?: ReactNode;
+  onRequestCancel: (registration: RegistrationRecord) => void;
 }) {
+  const headingId = useId();
   return (
-    <section className="panel">
-      <h2>{title}</h2>
-      {items.length === 0 ? <p className="hint">目前沒有資料</p> : null}
-      <div className="list">
-        {items.map((item) => (
-          <div className="list-item" key={item.registrationId}>
-            <div>
-              <strong>{item.displayLabel}</strong>
-              {item.status === 'WAITLIST' && item.waitlistPosition ? (
-                <div className="hint">候補第 {item.waitlistPosition} 位</div>
+    <section className="panel registration-panel" aria-labelledby={headingId}>
+      <div className="section-heading">
+        <h2 id={headingId}>{title}</h2>
+        {headingExtra}
+      </div>
+      {items.length === 0 ? <p className="hint list-empty">{emptyLabel}</p> : null}
+      {items.length > 0 ? (
+        <div className="list">
+          {items.map((item) => (
+            <div className="list-item" key={item.registrationId}>
+              <div className="list-item-main">
+                <strong>{item.displayLabel}</strong>
+                {item.status === 'WAITLIST' && item.waitlistPosition ? (
+                  <div className="hint">候補第 {item.waitlistPosition} 位</div>
+                ) : null}
+              </div>
+              {item.canCancel ? (
+                <button
+                  className="btn secondary btn-compact"
+                  type="button"
+                  onClick={() => onRequestCancel(item)}
+                >
+                  {cancelListButtonLabel(item)}
+                </button>
               ) : null}
             </div>
-            {item.canCancel ? (
-              <button className="btn secondary" type="button" onClick={() => onCancel(item)}>
-                取消
-              </button>
-            ) : null}
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -52,6 +107,10 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
   const [proxyName, setProxyName] = useState('');
   const [invite, setInvite] = useState<TransferInviteCreated | null>(null);
   const [pending, setPending] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState<RegistrationRecord | null>(null);
+  const [cancelPending, setCancelPending] = useState(false);
+  const [cancelError, setCancelError] = useState('');
+  const [helpOpen, setHelpOpen] = useState(false);
 
   async function reload() {
     const result = await api.getEvent(session, eventId);
@@ -87,6 +146,22 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
     }
   }
 
+  async function confirmCancel() {
+    if (!cancelTarget || cancelPending) return;
+    setCancelPending(true);
+    setCancelError('');
+    try {
+      await api.cancel(session, cancelTarget.registrationId);
+      await reload();
+      setNotice(cancelTarget.status === 'WAITLIST' ? '已取消候補' : '已取消報名');
+      setCancelTarget(null);
+    } catch (err) {
+      setCancelError(err instanceof Error ? err.message : '取消失敗');
+    } finally {
+      setCancelPending(false);
+    }
+  }
+
   const shareUrl = invite ? `${window.location.origin}${invite.sharePath}` : '';
   const justCreated = searchParams.get('created') === '1';
   const justCopied = searchParams.get('copied') === '1';
@@ -104,13 +179,14 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
   const proxyLabel = full && event.waitlistEnabled ? '代他人加入候補' : '代他人報名';
 
   return (
-    <div className="stack">
+    <div className="stack event-detail-page">
       <SiteNav current="events" />
-      <div className="topbar">
-        <button className="btn ghost" type="button" onClick={() => navigate('/')}>
-          返回列表
-        </button>
+
+      {/* 1. 返回活動列表 */}
+      <div className="detail-back-row">
+        <BackToListButton onClick={() => navigate('/')} />
       </div>
+
       {justCreated || justCopied ? (
         <section className="panel stack">
           <strong>{justCopied ? '已建立複製活動' : '活動已建立，你是這場的主揪'}</strong>
@@ -124,19 +200,48 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
       ) : null}
       {notice ? <div className="toast">{notice}</div> : null}
       {error ? <StateBlock kind="error" title="操作失敗">{error}</StateBlock> : null}
-      <EventCard event={event} />
-      <p className="hint">主揪：{event.organizerDisplayName}</p>
-      <div className="row">
-        <button className="btn secondary" type="button" onClick={() => navigate(`/events/new?copy=${eventId}`)}>
-          複製活動
-        </button>
-      </div>
 
+      {/* 2. 活動資訊卡片 */}
+      <EventCard event={event} />
+      <p className="hint organizer-line">主揪：{event.organizerDisplayName}</p>
+
+      {/* 3. 正式報名名單 */}
+      <RegistrationList
+        title={`正式報名名單（${event.confirmedCount}／${event.capacity}）`}
+        emptyLabel="目前尚無正式報名"
+        items={event.registrations.confirmed}
+        headingExtra={
+          <button
+            type="button"
+            className="icon-help"
+            aria-label="查看報名與代報說明"
+            onClick={() => setHelpOpen(true)}
+          >
+            <span aria-hidden="true">?</span>
+          </button>
+        }
+        onRequestCancel={(item) => {
+          setCancelError('');
+          setCancelTarget(item);
+        }}
+      />
+
+      {/* 4. 候補名單（有開放候補時） */}
+      {event.waitlistEnabled ? (
+        <RegistrationList
+          title={`候補名單（${event.waitlistCount}）`}
+          emptyLabel="目前尚無候補"
+          items={event.registrations.waitlist}
+          onRequestCancel={(item) => {
+            setCancelError('');
+            setCancelTarget(item);
+          }}
+        />
+      ) : null}
+
+      {/* 5. 本人報名／代報操作 */}
       <section className="panel stack">
         <h2>報名</h2>
-        <Link to="/help/join" className="hint-link">
-          查看報名與代報說明
-        </Link>
         {event.status !== 'OPEN' ? <p className="hint">此活動已關閉報名。</p> : null}
         <div className="row">
           <button
@@ -180,19 +285,9 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
         </button>
       </section>
 
-      <RegistrationList
-        title="正式報名名單"
-        items={event.registrations.confirmed}
-        onCancel={(item) => run(() => api.cancel(session, item.registrationId), '已取消報名')}
-      />
-      <RegistrationList
-        title="候補名單"
-        items={event.registrations.waitlist}
-        onCancel={(item) => run(() => api.cancel(session, item.registrationId), '已取消候補')}
-      />
-
+      {/* 6. 主揪管理 */}
       {event.viewer.isOrganizer ? (
-        <section className="panel stack">
+        <section className="panel stack organizer-panel">
           <h2>主揪管理</h2>
           <div className="row">
             <button className="btn secondary" type="button" onClick={() => navigate(`/events/${eventId}/edit`)}>
@@ -283,6 +378,26 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
           ) : null}
         </section>
       ) : null}
+
+      {/* 7. 複製活動（整頁最下方） */}
+      <div className="copy-event-footer">
+        <CopyEventButton onClick={() => navigate(`/events/new?copy=${eventId}`)} />
+      </div>
+
+      <CancelRegistrationDialog
+        item={cancelTarget}
+        pending={cancelPending}
+        error={cancelError}
+        onDismiss={() => {
+          if (cancelPending) return;
+          setCancelTarget(null);
+          setCancelError('');
+        }}
+        onConfirm={() => {
+          void confirmCancel();
+        }}
+      />
+      <JoinHelpSheet open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 }
