@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AUTH_EXPIRED_BODY, AUTH_EXTERNAL_BROWSER_MESSAGE } from './auth-recovery-keys';
 import { JOYIN_CONTEXT_STORAGE_KEY } from './liff-context';
 import {
   assertEndpointRedirectUri,
@@ -38,17 +39,28 @@ function memoryStorage(initial: Record<string, string> = {}) {
 function mockLiff(overrides: Partial<LiffLike> & { initImpl?: () => Promise<void> } = {}): LiffLike & {
   init: ReturnType<typeof vi.fn>;
   login: ReturnType<typeof vi.fn>;
+  logout: ReturnType<typeof vi.fn>;
 } {
-  const init = vi.fn(async () => {
+  const init = vi.fn(async (config?: { liffId: string; withLoginOnExternalBrowser?: boolean }) => {
+    void config;
     if (overrides.initImpl) await overrides.initImpl();
   });
   const login = vi.fn();
+  const logout = vi.fn();
   return {
     init,
     login,
+    logout,
+    closeWindow: overrides.closeWindow ?? vi.fn(),
     isLoggedIn: overrides.isLoggedIn ?? (() => true),
     isInClient: overrides.isInClient ?? (() => false),
     getIDToken: overrides.getIDToken ?? (() => VALID_JWT_A),
+    getDecodedIDToken:
+      overrides.getDecodedIDToken ??
+      (() => ({
+        iat: Math.floor(Date.now() / 1000) - 60,
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      })),
     getProfile:
       overrides.getProfile ??
       (async () => ({ userId: 'U-alice', displayName: 'Alice' })),
@@ -84,6 +96,19 @@ describe('initLiffSingleton', () => {
       initLiffSingleton(liff, 'liff-id', { timeoutMs: 500 }),
     ]);
     expect(liff.init).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses withLoginOnExternalBrowser and never requires manual login', async () => {
+    const liff = mockLiff();
+    await initLiffSingleton(liff, 'liff-id', {
+      timeoutMs: 500,
+      withLoginOnExternalBrowser: true,
+    });
+    expect(liff.init).toHaveBeenCalledWith({
+      liffId: 'liff-id',
+      withLoginOnExternalBrowser: true,
+    });
+    expect(liff.login).not.toHaveBeenCalled();
   });
 
   it('times out hanging init so callers are not stuck forever', async () => {
@@ -144,13 +169,15 @@ describe('initSession boot flow', () => {
     });
     expect(result.status).toBe('ready');
     expect(result.phase).toBe('ready');
-    expect(result.session?.idToken).toBe(VALID_JWT_A);
+    expect(result.session?.getIdToken()).toBe(VALID_JWT_A);
     expect(result.session?.contextToken).toBe(CONTEXT);
     expect(phases).toContain('preserving_context');
     expect(phases).toContain('initializing_liff');
     expect(phases).toContain('retrieving_id_token');
     expect(phases).toContain('ready');
     expect(phases).not.toContain('failed');
+    expect(liff.login).not.toHaveBeenCalled();
+    expect(liff.logout).not.toHaveBeenCalled();
   });
 
   it('returns failed (not hang) when init rejects', async () => {
@@ -203,7 +230,7 @@ describe('initSession boot flow', () => {
     expect(liff.init).toHaveBeenCalledTimes(1);
   });
 
-  it('auto-calls liff.login at most once per browser session', async () => {
+  it('external browser uses withLoginOnExternalBrowser and never calls liff.login', async () => {
     const liff = mockLiff({
       isLoggedIn: () => false,
       isInClient: () => false,
@@ -216,13 +243,15 @@ describe('initSession boot flow', () => {
       storage,
       locationSearch: `?context=${CONTEXT}`,
     });
-    expect(first.status).toBe('redirecting');
-    expect(first.phase).toBe('redirecting_login');
-    expect(liff.login).toHaveBeenCalledTimes(1);
-    expect(liff.login.mock.calls[0][0].redirectUri).toBe('https://joyin-web.pages.dev/');
+    expect(first.status).toBe('failed');
+    expect(first.error?.code).toBe('external_browser_required');
+    expect(first.error?.message).toBe(AUTH_EXTERNAL_BROWSER_MESSAGE);
+    expect(liff.init.mock.calls[0][0].withLoginOnExternalBrowser).toBe(true);
+    expect(liff.login).not.toHaveBeenCalled();
+    expect(liff.logout).not.toHaveBeenCalled();
     expect(storage.getItem(JOYIN_LOGIN_ATTEMPTED_KEY)).toBe('1');
 
-    // Simulate OAuth return still not logged in — must NOT auto login again
+    // Second boot: no second auto-login redirect
     resetLiffBootStateForTests();
     const second = await initSession({
       allowDev: false,
@@ -233,16 +262,60 @@ describe('initSession boot flow', () => {
       locationSearch: '',
     });
     expect(second.status).toBe('failed');
-    expect(second.phase).toBe('login_required');
-    expect(second.canRetryLogin).toBe(true);
-    expect(liff.login).toHaveBeenCalledTimes(1);
+    expect(liff.init.mock.calls[1][0].withLoginOnExternalBrowser).toBe(false);
+    expect(liff.login).not.toHaveBeenCalled();
   });
 
-  it('manual relogin clears the one-shot flag and calls login again', async () => {
+  it('LIFF Browser + expired token never logout/login/API redirect', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const liff = mockLiff({
+      isLoggedIn: () => true,
+      isInClient: () => true,
+      getDecodedIDToken: () => ({ iat: now - 10_000, exp: now - 5 }),
+    });
+    const result = await initSession({
+      allowDev: false,
+      liff,
+      liffId: 'liff-id',
+      endpointOrigin: 'https://joyin-web.pages.dev',
+      storage,
+      locationSearch: `?context=${CONTEXT}`,
+    });
+    expect(result.status).toBe('failed');
+    expect(result.error?.code).toBe('auth_token_expired');
+    expect(result.error?.message).toBe(AUTH_EXPIRED_BODY);
+    expect(result.canCloseWindow).toBe(true);
+    expect(result.canRetryLogin).toBe(false);
+    expect(liff.logout).not.toHaveBeenCalled();
+    expect(liff.login).not.toHaveBeenCalled();
+    // Context must survive auth failure
+    expect(storage.getItem(JOYIN_CONTEXT_STORAGE_KEY)).toBe(CONTEXT);
+  });
+
+  it('LIFF Browser not logged in shows expired UI path without login', async () => {
+    const liff = mockLiff({
+      isLoggedIn: () => false,
+      isInClient: () => true,
+    });
+    const result = await initSession({
+      allowDev: false,
+      liff,
+      liffId: 'liff-id',
+      endpointOrigin: 'https://joyin-web.pages.dev',
+      storage,
+    });
+    expect(result.status).toBe('failed');
+    expect(result.error?.code).toBe('auth_token_expired');
+    expect(result.canCloseWindow).toBe(true);
+    expect(liff.login).not.toHaveBeenCalled();
+    expect(liff.logout).not.toHaveBeenCalled();
+  });
+
+  it('manual retry clears one-shot flag and re-inits without liff.login', async () => {
     storage.setItem(JOYIN_LOGIN_ATTEMPTED_KEY, '1');
     storage.setItem(JOYIN_CONTEXT_STORAGE_KEY, CONTEXT);
     const liff = mockLiff({
-      isLoggedIn: () => false,
+      isLoggedIn: () => true,
       isInClient: () => false,
     });
     const result = await startManualLineLogin({
@@ -252,9 +325,9 @@ describe('initSession boot flow', () => {
       endpointOrigin: 'https://joyin-web.pages.dev',
       storage,
     });
-    expect(result.status).toBe('redirecting');
-    expect(liff.login).toHaveBeenCalledTimes(1);
-    // Group context must survive manual login retry.
+    expect(result.status).toBe('ready');
+    expect(liff.login).not.toHaveBeenCalled();
+    expect(liff.logout).not.toHaveBeenCalled();
     expect(storage.getItem(JOYIN_CONTEXT_STORAGE_KEY)).toBe(CONTEXT);
   });
 
@@ -291,6 +364,7 @@ describe('initSession boot flow', () => {
   it('fails immediately when ID Token is null or not a JWT', async () => {
     const liff = mockLiff({
       getIDToken: () => null,
+      getDecodedIDToken: () => null,
     });
     const result = await initSession({
       allowDev: false,
@@ -304,7 +378,7 @@ describe('initSession boot flow', () => {
     expect(result.error?.code).toBe('auth_token_invalid');
   });
 
-  it('lets A and B share context with different ID Tokens', async () => {
+  it('lets A and B share context with different ID Tokens via getIdToken()', async () => {
     storage.setItem(JOYIN_CONTEXT_STORAGE_KEY, CONTEXT);
 
     const liffA = mockLiff({
@@ -320,7 +394,7 @@ describe('initSession boot flow', () => {
       locationSearch: '',
     });
     expect(resultA.status).toBe('ready');
-    expect(resultA.session?.idToken).toBe(VALID_JWT_A);
+    expect(resultA.session?.getIdToken()).toBe(VALID_JWT_A);
     expect(resultA.session?.contextToken).toBe(CONTEXT);
     expect(resultA.session?.lineUserId).toBe('U-alice');
 
@@ -338,12 +412,11 @@ describe('initSession boot flow', () => {
       locationSearch: '',
     });
     expect(resultB.status).toBe('ready');
-    expect(resultB.session?.idToken).toBe(VALID_JWT_B);
-    expect(resultB.session?.idToken).not.toBe(resultA.session?.idToken);
+    expect(resultB.session?.getIdToken()).toBe(VALID_JWT_B);
+    expect(resultB.session?.getIdToken()).not.toBe(resultA.session?.getIdToken());
     expect(resultB.session?.contextToken).toBe(CONTEXT);
     expect(resultB.session?.lineUserId).toBe('U-bob');
 
-    // ID Token must not be written to sessionStorage
     expect(storage.getItem('idToken')).toBeNull();
     expect(storage.getItem('Authorization')).toBeNull();
     expect(storage.getItem(JOYIN_CONTEXT_STORAGE_KEY)).toBe(CONTEXT);

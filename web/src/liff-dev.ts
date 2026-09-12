@@ -30,12 +30,12 @@ export async function runDevBoot(deps: InitSessionDeps): Promise<LiffBootResult>
     source = contextToken ? 'sessionStorage' : '';
   }
   const session: LiffSession = {
-    idToken,
     lineUserId: import.meta.env.VITE_DEV_USER_ID || 'U-dev',
     displayName: import.meta.env.VITE_DEV_DISPLAY_NAME || '開發者',
     contextToken,
     inClient: false,
     contextDiag: buildContextDiag(contextToken, source),
+    getIdToken: () => idToken,
   };
   return { status: 'ready', phase: 'ready', session };
 }

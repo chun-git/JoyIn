@@ -11,11 +11,11 @@ vi.mock('./liff', async (importOriginal) => {
       status: 'ready' as const,
       phase: 'ready' as const,
       session: {
-        idToken: 'header.payload.signature',
         lineUserId: 'U-lee',
         displayName: 'Lee',
         contextToken: '',
         inClient: false,
+        getIdToken: () => 'header.payload.signature',
         contextDiag: {
           hasContextToken: false,
           contextTokenLength: 0,
@@ -25,7 +25,6 @@ vi.mock('./liff', async (importOriginal) => {
       },
     })),
     retryInitSession: vi.fn(),
-    startManualLineLogin: vi.fn(),
   };
 });
 

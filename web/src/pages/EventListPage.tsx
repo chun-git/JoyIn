@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { EventSummary } from '../../../shared/types';
 import { api, ApiError } from '../api';
+import { AuthExpiredPanel } from '../components/AuthExpiredPanel';
 import { EventCard } from '../components/EventCard';
 import { StateBlock } from '../components/StateBlock';
 import { SiteNav } from '../components/SiteNav';
@@ -62,8 +63,8 @@ export function EventListPage({
                   : `群組連結驗證失敗（${code}）。請回到 LINE 群組重新輸入 /list，並從新的活動卡片開啟。`,
               );
             } else if (code === 'auth_token_expired') {
-              setErrorTitle('LINE 登入已過期');
-              setError('LINE 登入已過期，系統將重新登入。');
+              setErrorTitle('LINE 登入狀態已失效');
+              setError('auth_token_expired');
             } else if (
               code === 'auth_token_missing' ||
               code === 'auth_token_malformed' ||
@@ -126,7 +127,13 @@ export function EventListPage({
         </button>
       </div>
       {loading ? <StateBlock kind="loading" title="活動載入中…" /> : null}
-      {error ? <StateBlock kind="error" title={errorTitle}>{error}</StateBlock> : null}
+      {error === 'auth_token_expired' ? (
+        <AuthExpiredPanel inClient={session.inClient} kind="expired" />
+      ) : error ? (
+        <StateBlock kind="error" title={errorTitle}>
+          {error}
+        </StateBlock>
+      ) : null}
       {!loading && !error && sorted.length === 0 ? (
         <StateBlock kind="empty" title="目前沒有尚未結束的活動">
           任何群組成員都可以建立第一場活動。

@@ -1,12 +1,9 @@
 import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const initSession = vi.fn();
 const retryInitSession = vi.fn();
-const startManualLineLogin = vi.fn();
-const recoverFromExpiredIdToken = vi.fn();
 
 vi.mock('./liff', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./liff')>();
@@ -14,63 +11,17 @@ vi.mock('./liff', async (importOriginal) => {
     ...actual,
     initSession: (...args: unknown[]) => initSession(...args),
     retryInitSession: (...args: unknown[]) => retryInitSession(...args),
-    startManualLineLogin: (...args: unknown[]) => startManualLineLogin(...args),
     getCachedLiff: () => null,
   };
 });
 
-vi.mock('./auth-recovery', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./auth-recovery')>();
-  return {
-    ...actual,
-    recoverFromExpiredIdToken: (...args: unknown[]) => recoverFromExpiredIdToken(...args),
-  };
-});
-
 import App from './App';
+import { AUTH_EXPIRED_BODY, AUTH_EXPIRED_TITLE, AUTH_EXTERNAL_BROWSER_MESSAGE } from './auth-recovery-keys';
 
 describe('App LIFF boot loading states', () => {
   beforeEach(() => {
     initSession.mockReset();
     retryInitSession.mockReset();
-    startManualLineLogin.mockReset();
-    recoverFromExpiredIdToken.mockReset();
-    recoverFromExpiredIdToken.mockResolvedValue('redirecting');
-  });
-
-  it('does not stay on forever loading when boot redirects for login', async () => {
-    initSession.mockResolvedValue({
-      status: 'redirecting',
-      phase: 'redirecting_login',
-    });
-
-    render(
-      <MemoryRouter initialEntries={['/']}>
-        <App />
-      </MemoryRouter>,
-    );
-
-    expect(await screen.findByText('正在前往 LINE 登入…')).toBeInTheDocument();
-    expect(screen.queryByText('正在連接 LINE…')).not.toBeInTheDocument();
-  });
-
-  it('leaves loading and shows 重新登入 LINE after login_required', async () => {
-    initSession.mockResolvedValue({
-      status: 'failed',
-      phase: 'login_required',
-      canRetryLogin: true,
-      error: { message: '尚未登入 LINE。請點「重新登入 LINE」', code: 'login_required' },
-    });
-
-    render(
-      <MemoryRouter initialEntries={['/']}>
-        <App />
-      </MemoryRouter>,
-    );
-
-    expect(await screen.findByText(/尚未登入 LINE/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '重新登入 LINE' })).toBeInTheDocument();
-    expect(screen.queryByText('正在連接 LINE…')).not.toBeInTheDocument();
   });
 
   it('leaves loading when init times out', async () => {
@@ -91,15 +42,36 @@ describe('App LIFF boot loading states', () => {
     expect(screen.queryByText('正在連接 LINE…')).not.toBeInTheDocument();
   });
 
-  it('manual 重新登入 LINE triggers forced auth recovery', async () => {
-    const user = userEvent.setup();
+  it('shows expired panel without 重新登入 when auth_token_expired in LIFF Browser', async () => {
+    initSession.mockResolvedValue({
+      status: 'failed',
+      phase: 'failed',
+      canRetryLogin: false,
+      canCloseWindow: true,
+      error: { message: AUTH_EXPIRED_BODY, code: 'auth_token_expired' },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(AUTH_EXPIRED_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(AUTH_EXPIRED_BODY)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '關閉頁面' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '重新登入 LINE' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '重試登入' })).not.toBeInTheDocument();
+    expect(screen.queryByText('正在連接 LINE…')).not.toBeInTheDocument();
+  });
+
+  it('shows external browser message without login buttons', async () => {
     initSession.mockResolvedValue({
       status: 'failed',
       phase: 'login_required',
-      canRetryLogin: true,
-      error: { message: '請重新登入', code: 'login_required' },
+      canRetryLogin: false,
+      error: { message: AUTH_EXTERNAL_BROWSER_MESSAGE, code: 'external_browser_required' },
     });
-    recoverFromExpiredIdToken.mockResolvedValue('redirecting');
 
     render(
       <MemoryRouter initialEntries={['/']}>
@@ -107,20 +79,23 @@ describe('App LIFF boot loading states', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByRole('button', { name: '重新登入 LINE' });
-    await user.click(screen.getByRole('button', { name: '重新登入 LINE' }));
-    await waitFor(() => {
-      expect(recoverFromExpiredIdToken).toHaveBeenCalled();
-    });
-    expect(recoverFromExpiredIdToken.mock.calls.at(-1)?.[0]?.force).toBe(true);
-    expect(await screen.findByText('正在前往 LINE 登入…')).toBeInTheDocument();
+    expect(await screen.findByText(AUTH_EXTERNAL_BROWSER_MESSAGE)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '重新登入 LINE' })).not.toBeInTheDocument();
   });
 
-  it('switches redirecting_login to failed with 重新登入 after 8s if page stays', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+  it('retry button calls retryInitSession for init failures', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
     initSession.mockResolvedValue({
-      status: 'redirecting',
-      phase: 'redirecting_login',
+      status: 'failed',
+      phase: 'failed',
+      canRetryLogin: true,
+      error: { message: 'LIFF 初始化逾時', code: 'init_timeout' },
+    });
+    retryInitSession.mockResolvedValue({
+      status: 'failed',
+      phase: 'failed',
+      canRetryLogin: true,
+      error: { message: '仍失敗', code: 'init_error' },
     });
 
     render(
@@ -129,11 +104,10 @@ describe('App LIFF boot loading states', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('正在前往 LINE 登入…')).toBeInTheDocument();
-    await vi.advanceTimersByTimeAsync(8_000);
-    expect(await screen.findByText(/無法重新登入 LINE/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '重新登入 LINE' })).toBeInTheDocument();
-    expect(screen.queryByText('正在連接 LINE…')).not.toBeInTheDocument();
-    vi.useRealTimers();
+    await screen.findByRole('button', { name: '重試' });
+    await user.click(screen.getByRole('button', { name: '重試' }));
+    await waitFor(() => {
+      expect(retryInitSession).toHaveBeenCalled();
+    });
   });
 });

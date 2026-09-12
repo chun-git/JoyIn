@@ -21,9 +21,11 @@ html, body, #root {
   width: 100%;
   min-height: 100%;
   max-width: 100%;
+  overflow-x: hidden;
 }
 body {
   margin: 0;
+  overflow-x: hidden;
   background:
     radial-gradient(1200px 500px at 10% -10%, #f8e7c8 0%, transparent 55%),
     radial-gradient(900px 420px at 100% 0%, #cfe7e2 0%, transparent 50%),

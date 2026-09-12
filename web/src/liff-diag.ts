@@ -20,6 +20,7 @@ export type LiffDiagEvent =
   | 'login_skipped_already_attempted'
   | 'id_token_ok'
   | 'id_token_error'
+  | 'id_token_expired'
   | 'boot_failed'
   | 'boot_ready';
 
@@ -34,6 +35,11 @@ export interface SafeLiffDiag {
   contextLength?: number;
   jwtPartCount?: number;
   idTokenFormatOk?: boolean;
+  idTokenPresent?: boolean;
+  iat?: number;
+  exp?: number;
+  now?: number;
+  secondsUntilExpiry?: number;
   code?: string;
   message?: string;
   at: string;
@@ -62,6 +68,11 @@ export function logSafeDiag(diag: SafeLiffDiag): void {
     contextLength: diag.contextLength,
     jwtPartCount: diag.jwtPartCount,
     idTokenFormatOk: diag.idTokenFormatOk,
+    idTokenPresent: diag.idTokenPresent,
+    iat: diag.iat,
+    exp: diag.exp,
+    now: diag.now,
+    secondsUntilExpiry: diag.secondsUntilExpiry,
     code: diag.code,
     message: diag.message ? String(diag.message).slice(0, 120) : undefined,
     at: diag.at,

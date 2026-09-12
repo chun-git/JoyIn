@@ -7,8 +7,10 @@ import type {
   TransferInvitePreview,
   UpdateEventInput,
 } from '../../shared/types';
-import type { LiffSession } from './liff';
-import { buildAuthorizationHeader } from './auth-token';
+import { AUTH_EXPIRED_BODY } from './auth-recovery-keys';
+import { buildAuthorizationHeader, describeIdTokenSafe } from './auth-token';
+import { readIdTokenExpiry, nowUnixSeconds } from './id-token-expiry';
+import { getCachedLiff, logSafeDiag, type LiffSession } from './liff';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
@@ -23,19 +25,50 @@ export class ApiError extends Error {
   }
 }
 
-type AuthExpiredHandler = (error: ApiError) => void;
+/**
+ * Resolve a fresh ID Token immediately before each request.
+ * Never reuses a string cached on React state / closures from boot time.
+ */
+export function resolveFreshIdToken(session: LiffSession, nowMs = Date.now()): string {
+  const liff = getCachedLiff();
+  const decoded =
+    (liff && typeof liff.getDecodedIDToken === 'function' ? liff.getDecodedIDToken() : null) ??
+    session.getDecodedIdToken?.() ??
+    null;
+  const expiry = readIdTokenExpiry(decoded, nowUnixSeconds(nowMs));
 
-let authExpiredHandler: AuthExpiredHandler | null = null;
+  const raw = liff ? liff.getIDToken() : session.getIdToken();
+  const tokenDiag = describeIdTokenSafe(typeof raw === 'string' ? raw : '');
 
-/** Register a single handler for auth_token_expired (auto re-login). */
-export function setAuthTokenExpiredHandler(handler: AuthExpiredHandler | null): void {
-  authExpiredHandler = handler;
+  logSafeDiag({
+    event: expiry.expired ? 'id_token_expired' : 'id_token_ok',
+    phase: 'loading_events',
+    isInClient: session.inClient,
+    idTokenPresent: tokenDiag.present,
+    jwtPartCount: tokenDiag.partCount,
+    idTokenFormatOk: tokenDiag.formatOk,
+    iat: expiry.iat,
+    exp: expiry.exp,
+    now: expiry.now,
+    secondsUntilExpiry: expiry.secondsUntilExpiry,
+    at: new Date().toISOString(),
+  });
+
+  if (expiry.expired) {
+    throw new ApiError(401, 'auth_token_expired', AUTH_EXPIRED_BODY);
+  }
+
+  if (raw == null || typeof raw !== 'string' || !raw.trim()) {
+    throw new ApiError(401, 'auth_token_missing', '缺少 LIFF ID Token');
+  }
+
+  return raw.trim();
 }
 
 async function request<T>(path: string, session: LiffSession, init: RequestInit = {}): Promise<T> {
+  const idToken = resolveFreshIdToken(session);
   const headers = new Headers(init.headers);
-  // Single Bearer + raw ID Token string — no encodeURIComponent / JSON.stringify / extra quotes.
-  headers.set('Authorization', buildAuthorizationHeader(session.idToken));
+  headers.set('Authorization', buildAuthorizationHeader(idToken));
   if (session.contextToken) {
     headers.set('X-JoyIn-Context', session.contextToken);
   }
@@ -50,19 +83,11 @@ async function request<T>(path: string, session: LiffSession, init: RequestInit 
   } & T;
 
   if (!response.ok) {
-    const error = new ApiError(
+    throw new ApiError(
       response.status,
       typeof data.error === 'string' ? data.error : 'ERROR',
       typeof data.message === 'string' ? data.message : '請求失敗',
     );
-    if (error.code === 'auth_token_expired') {
-      try {
-        authExpiredHandler?.(error);
-      } catch {
-        // never block the throw
-      }
-    }
-    throw error;
   }
   return data;
 }

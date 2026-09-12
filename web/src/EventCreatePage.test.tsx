@@ -19,11 +19,11 @@ vi.mock('./api', () => ({
 }));
 
 const session: LiffSession = {
-  idToken: 'test:U-lee:Lee',
   lineUserId: 'U-lee',
   displayName: 'Lee',
   contextToken: 'test-context-token',
   inClient: false,
+  getIdToken: () => 'test:U-lee:Lee',
 };
 
 describe('EventCreatePage copy flow', () => {
