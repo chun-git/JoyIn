@@ -105,9 +105,17 @@ export async function handleLineWebhook(
       console.error('LIFF_URL is not configured; cannot reply to /list');
       continue;
     }
-    let liffUrl: string;
+    let listUrl: string;
+    const eventUrls: Record<string, string> = {};
     try {
-      liffUrl = buildLiffUrlWithContext(liffBase, contextToken);
+      listUrl = buildLiffUrlWithContext(liffBase, contextToken, '/events');
+      for (const event of upcoming) {
+        eventUrls[event.eventId] = buildLiffUrlWithContext(
+          liffBase,
+          contextToken,
+          `/events/${event.eventId}`,
+        );
+      }
     } catch (err) {
       console.error('[JoyIn /list flex] invalid LIFF_URL base', {
         message: err instanceof Error ? err.message : 'invalid',
@@ -121,6 +129,7 @@ export async function handleLineWebhook(
       });
       continue;
     }
+    const liffUrl = listUrl;
     const safe = await describeLiffUrlSafe(liffUrl, contextToken);
     // Decode payload fields for safe diagnostics only (no groupId / token values)
     let hasExpiresAt = false;
@@ -171,7 +180,7 @@ export async function handleLineWebhook(
       console.error('[JoyIn /list flex] unparseable card URI');
       continue;
     }
-    const flex = buildEventCarousel(upcoming, liffUrl);
+    const flex = buildEventCarousel(upcoming, { listUrl, eventUrls });
     await replyMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, flex);
   }
 

@@ -41,8 +41,17 @@ describe('/list Flex LIFF URIs', () => {
     expect(liffUrl).not.toContain('external=true');
     expect(isFlexLiffUri(liffUrl)).toBe(true);
 
-    const filled = buildEventCarousel([sampleEvent], liffUrl);
-    const empty = buildEventCarousel([], liffUrl);
+    const filled = buildEventCarousel([sampleEvent], {
+      listUrl: buildLiffUrlWithContext(LIFF_BASE, token, '/events'),
+      eventUrls: {
+        [sampleEvent.eventId]: buildLiffUrlWithContext(
+          LIFF_BASE,
+          token,
+          `/events/${sampleEvent.eventId}`,
+        ),
+      },
+    });
+    const empty = buildEventCarousel([], buildLiffUrlWithContext(LIFF_BASE, token, '/events'));
     const serialized = `${JSON.stringify(filled)}\n${JSON.stringify(empty)}`;
 
     const uris = [...serialized.matchAll(/"uri"\s*:\s*"([^"]+)"/g)].map((m) => m[1]);
@@ -59,11 +68,16 @@ describe('/list Flex LIFF URIs', () => {
         groupId: 'Cgroup123',
       });
     }
+    expect(serialized).toContain(`/events/${sampleEvent.eventId}`);
+    expect(serialized).toContain('/events?');
+    expect(serialized).toContain('查看並報名');
+    expect(serialized).toContain('查看全部活動');
   });
 
   it('URLSearchParams round-trip does not corrupt context', async () => {
     const token = await signLiffContext('flex-secret', 'CgroupRoundTrip');
-    const url = buildLiffUrlWithContext(LIFF_BASE, token);
+    const url = buildLiffUrlWithContext(LIFF_BASE, token, `/events/${sampleEvent.eventId}`);
+    expect(url).toContain(`/events/${sampleEvent.eventId}`);
     const again = new URL(url).searchParams.get('context');
     expect(again).toBe(token);
     await expect(verifyLiffContext('flex-secret', again!)).resolves.toMatchObject({

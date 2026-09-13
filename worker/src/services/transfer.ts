@@ -1,14 +1,12 @@
 import type { TransferInviteCreated, TransferInvitePreview } from '../../../shared/types';
 import type { AuthUser } from '../env';
 import {
-  acceptInviteRow,
+  acceptTransferInviteAtomic,
   cancelPendingInvites,
   getEventRow,
   getInviteByHash,
-  insertOrganizerTransfer,
   insertTransferInvite,
   toEventSummary,
-  transferOrganizerRow,
 } from '../db/repo';
 import { Errors } from '../lib/errors';
 import { TRANSFER_INVITE_TTL_MS, nowIso, sha256Hex, newTransferToken } from '../lib/datetime';
@@ -71,74 +69,105 @@ export async function previewTransferInvite(
   if (!invite) {
     throw Errors.notFound('找不到轉移邀請');
   }
+  if (invite.status === 'ACCEPTED') {
+    throw Errors.transferInviteUsed();
+  }
+  if (invite.status === 'CANCELLED') {
+    throw Errors.transferInviteInvalid();
+  }
+  if (new Date(invite.expires_at).getTime() <= Date.now()) {
+    throw Errors.transferInviteExpired();
+  }
+
   const event = await getEventRow(db, invite.event_id);
   if (!event || event.status === 'DELETED') {
     throw Errors.notFound('找不到活動');
-  }
-
-  let status = invite.status;
-  if (status === 'PENDING' && new Date(invite.expires_at).getTime() <= Date.now()) {
-    status = 'CANCELLED';
   }
 
   return {
     eventId: event.event_id,
     eventName: event.name,
     organizerDisplayName: event.organizer_display_name,
-    status,
+    status: invite.status,
     expiresAt: invite.expires_at,
     isOrganizer: user.lineUserId === event.organizer_line_user_id,
   };
 }
 
-export async function acceptTransferInvite(
-  db: D1Database,
-  token: string,
-  user: AuthUser,
-) {
+function classifyInviteFailure(
+  invite: Awaited<ReturnType<typeof getInviteByHash>>,
+  nowMs: number,
+): never {
+  if (!invite) {
+    throw Errors.notFound('找不到轉移邀請');
+  }
+  if (invite.status === 'ACCEPTED') {
+    throw Errors.transferInviteUsed();
+  }
+  if (invite.status === 'CANCELLED') {
+    throw Errors.transferInviteInvalid();
+  }
+  if (new Date(invite.expires_at).getTime() <= nowMs) {
+    throw Errors.transferInviteExpired();
+  }
+  throw Errors.transferInviteInvalid();
+}
+
+/**
+ * Accept transfer with a single D1 batch (atomic transaction):
+ * - CAS invite PENDING + not expired → ACCEPTED (+ accepted_by)
+ * - CAS event organizer still equals invite.from → new organizer
+ * - cancel other PENDING invites for the event
+ * - insert organizer_transfers audit
+ */
+export async function acceptTransferInvite(db: D1Database, token: string, user: AuthUser) {
+  const nowMs = Date.now();
   const invite = await getInviteByHash(db, await sha256Hex(token));
   if (!invite) {
     throw Errors.notFound('找不到轉移邀請');
   }
   if (invite.status === 'CANCELLED') {
-    throw Errors.gone('此轉移連結已失效');
+    throw Errors.transferInviteInvalid();
   }
   if (invite.status === 'ACCEPTED') {
-    throw Errors.conflict('此轉移連結已經使用過');
+    throw Errors.transferInviteUsed();
   }
-  if (new Date(invite.expires_at).getTime() <= Date.now()) {
-    throw Errors.gone('此轉移連結已過期');
+  if (new Date(invite.expires_at).getTime() <= nowMs) {
+    throw Errors.transferInviteExpired();
   }
   if (invite.from_line_user_id === user.lineUserId) {
     throw Errors.validation('不能把主揪轉移給自己');
   }
 
-  const event = await getVisibleEvent(db, invite.event_id);
+  const event = await getEventRow(db, invite.event_id);
+  if (!event || event.status === 'DELETED') {
+    throw Errors.notFound('找不到活動');
+  }
   if (event.organizer_line_user_id !== invite.from_line_user_id) {
-    throw Errors.conflict('活動主揪已變更，此連結無法使用');
+    throw Errors.transferInviteInvalid('活動主揪已變更，此連結無法使用');
+  }
+  if (event.organizer_line_user_id === user.lineUserId) {
+    throw Errors.validation('不能把主揪轉移給自己');
   }
 
   const acceptedAt = nowIso();
-  const accepted = await acceptInviteRow(
-    db,
-    invite.invite_id,
-    acceptedAt,
-    user.lineUserId,
-    user.displayName,
-  );
-  if (!accepted) {
-    throw Errors.conflict('此轉移連結已經使用過');
-  }
-  await insertOrganizerTransfer(db, {
-    transferId: newId(),
+  const { inviteAccepted, organizerUpdated } = await acceptTransferInviteAtomic(db, {
+    inviteId: invite.invite_id,
     eventId: event.event_id,
     fromLineUserId: invite.from_line_user_id,
     fromDisplayName: invite.from_display_name,
     toLineUserId: user.lineUserId,
     toDisplayName: user.displayName,
-    createdAt: acceptedAt,
+    acceptedAt,
+    transferId: newId(),
+    nowIso: acceptedAt,
   });
-  await transferOrganizerRow(db, event.event_id, user.lineUserId, user.displayName, acceptedAt);
+
+  if (!inviteAccepted || !organizerUpdated) {
+    // Batch rolled back — re-read to return the precise client code.
+    const again = await getInviteByHash(db, await sha256Hex(token));
+    classifyInviteFailure(again, Date.now());
+  }
 
   const updated = await getEventRow(db, event.event_id);
   if (!updated) {

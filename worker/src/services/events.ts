@@ -41,7 +41,8 @@ export async function getVisibleEvent(db: D1Database, eventId: string, groupId?:
     throw Errors.notFound('找不到活動');
   }
   if (groupId && row.group_id !== groupId) {
-    throw Errors.forbidden('此活動不屬於目前群組');
+    // Do not leak whether the event exists in another group.
+    throw Errors.notFound('找不到活動');
   }
   if (isExpired(endAtOf(row))) {
     throw Errors.gone('活動已結束');

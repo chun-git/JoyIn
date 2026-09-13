@@ -101,11 +101,16 @@ describe('flex carousel', () => {
       createdAt: '2026-09-10T00:00:00.000Z',
       updatedAt: '2026-09-10T00:00:00.000Z',
     };
-    const filled = buildEventCarousel([event], 'https://liff.line.me/test');
+    const filled = buildEventCarousel([event], {
+      listUrl: 'https://liff.line.me/test/events?context=a.b',
+      eventUrls: { e1: 'https://liff.line.me/test/events/e1?context=a.b' },
+    });
     expect(JSON.stringify(filled)).toContain('桌遊夜');
     expect(JSON.stringify(filled)).toContain('3／10');
     expect(JSON.stringify(filled)).toContain('2026-12-01 19:00 – 21:00');
-    expect(JSON.stringify(filled)).toContain('https://liff.line.me/test');
+    expect(JSON.stringify(filled)).toContain('https://liff.line.me/test/events/e1');
+    expect(JSON.stringify(filled)).toContain('查看全部活動');
+    expect(JSON.stringify(filled)).toContain('查看並報名');
   });
 });
 

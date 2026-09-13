@@ -63,7 +63,7 @@ export function EventCreatePage({ session }: { session: LiffSession }) {
           <strong>{copyId ? '複製活動' : '新增活動'}</strong>
           <span>{copyId ? '請重新設定開始與結束時間' : '建立後你會成為主揪'}</span>
         </div>
-        <button className="btn ghost" type="button" onClick={() => navigate('/')}>
+        <button className="btn ghost" type="button" onClick={() => navigate('/events')}>
           返回列表
         </button>
       </div>

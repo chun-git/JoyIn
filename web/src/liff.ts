@@ -6,6 +6,11 @@ import { buildContextDiag, getJoyInContextToken, preserveJoyInContextBeforeInit,
 import { describeIdTokenSafe, requireLiffIdToken } from './auth-token';
 import { nowUnixSeconds, readIdTokenExpiry, type DecodedIdTokenClaims } from './id-token-expiry';
 import {
+  cleanOauthParamsFromUrl,
+  consumePendingRoute,
+  preservePendingRoute,
+} from './liff-deep-link';
+import {
   detectOs,
   logSafeDiag,
   type JoyInFlowPhase,
@@ -71,6 +76,8 @@ export interface LiffBootResult {
   canRetryLogin?: boolean;
   /** True when UI should offer「關閉頁面」(LIFF Browser). */
   canCloseWindow?: boolean;
+  /** Safe in-app route restored after LIFF/OAuth (e.g. /events/{id}). */
+  pendingRoute?: string;
 }
 
 export type PhaseListener = (phase: JoyInFlowPhase, detail?: Partial<SafeLiffDiag>) => void;
@@ -460,13 +467,18 @@ async function runBoot(deps: InitSessionDeps, attempt: number): Promise<LiffBoot
       return devResult;
     }
 
-    // ——— 1. Preserve shared group context (A/B reusable); new /list overwrites old ———
+    // ——— 1. Preserve shared group context + deep-link route before init/redirect ———
     if (isCurrent()) setPhase('preserving_context');
     preserveJoyInContextBeforeInit({
       search: deps.locationSearch,
       storage,
       nowMs: deps.now?.() ?? Date.now(),
     });
+    preservePendingRoute(
+      storage,
+      typeof window !== 'undefined' ? window.location.pathname : undefined,
+      deps.locationSearch ?? (typeof window !== 'undefined' ? window.location.search : undefined),
+    );
     const contextPreview = getJoyInContextToken({
       search: deps.locationSearch,
       storage,
@@ -655,6 +667,9 @@ async function runBoot(deps: InitSessionDeps, attempt: number): Promise<LiffBoot
       return fail(new LiffBootError('boot_cancelled', '啟動已取消', 'failed'));
     }
 
+    const pendingRoute = consumePendingRoute(storage);
+    cleanOauthParamsFromUrl(deps.historyReplaceState);
+
     const session: LiffSession = {
       lineUserId: profile.userId,
       displayName: profile.displayName,
@@ -690,7 +705,7 @@ async function runBoot(deps: InitSessionDeps, attempt: number): Promise<LiffBoot
       at: new Date().toISOString(),
     });
 
-    return { status: 'ready', phase: 'ready', session };
+    return { status: 'ready', phase: 'ready', session, pendingRoute: pendingRoute || undefined };
   } catch (err) {
     const message = err instanceof Error ? err.message : '無法開啟 JoyIn';
     return fail(new LiffBootError('boot_error', message, 'failed', true));

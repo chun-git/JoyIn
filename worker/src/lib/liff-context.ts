@@ -112,14 +112,20 @@ async function hmacSha256Base64Url(secret: string, message: string): Promise<str
 /**
  * Build a Flex-card URI that opens JoyIn inside the LIFF browser.
  *
- * Must use `https://liff.line.me/<LIFF_ID>?context=…` (LIFF_URL).
+ * Must use `https://liff.line.me/<LIFF_ID>[/path]?context=…` (LIFF_URL).
  * Do NOT use the Pages Endpoint URL (`joyin-web.pages.dev`) as the card URI —
  * that opens outside LIFF so `liff.isInClient()` is false.
  *
  * Endpoint URL remains Pages for LINE Developers Console only.
  * Uses URL / URLSearchParams so context is correctly encoded.
+ *
+ * @param pathInApp optional app path e.g. `/events`, `/events/{eventId}`
  */
-export function buildLiffUrlWithContext(baseUrl: string, contextToken: string): string {
+export function buildLiffUrlWithContext(
+  baseUrl: string,
+  contextToken: string,
+  pathInApp = '/',
+): string {
   const url = new URL(baseUrl);
   if (url.protocol !== 'https:' || url.hostname !== 'liff.line.me') {
     throw new Error('Flex LIFF URI base must be https://liff.line.me/<LIFF_ID>');
@@ -129,13 +135,32 @@ export function buildLiffUrlWithContext(baseUrl: string, contextToken: string): 
   }
   url.search = '';
   url.hash = '';
-  // Normalize trailing slash on path — LIFF IDs work with or without; keep path as-is minus empty.
+
+  const liffBasePath = url.pathname.replace(/\/$/, '');
+  const appPath = normalizeAppPath(pathInApp);
+  url.pathname = appPath === '/' ? liffBasePath : `${liffBasePath}${appPath}`;
   url.searchParams.set('context', contextToken);
   const result = url.toString();
   if (result.includes('external=true') || result.includes('external%3Dtrue')) {
     throw new Error('Flex LIFF URI must not include external=true');
   }
   return result;
+}
+
+function normalizeAppPath(pathInApp: string): string {
+  const trimmed = (pathInApp || '/').trim() || '/';
+  if (!trimmed.startsWith('/')) {
+    throw new Error('App path must start with /');
+  }
+  if (
+    trimmed.includes('://') ||
+    trimmed.startsWith('//') ||
+    /javascript:/i.test(trimmed) ||
+    trimmed.includes('..')
+  ) {
+    throw new Error('App path is not allowed');
+  }
+  return trimmed === '/' ? '/' : trimmed.replace(/\/+$/, '') || '/';
 }
 
 /** True when a URI is a valid in-client LIFF Flex link (not Pages Endpoint). */

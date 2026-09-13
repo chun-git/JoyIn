@@ -6,6 +6,13 @@ export interface LineFlexMessage {
   contents: Record<string, unknown>;
 }
 
+export interface EventCarouselUrls {
+  /** Shared context-bearing LIFF base builder result for the list (`/events`). */
+  listUrl: string;
+  /** Per-event detail URLs keyed by eventId (`/events/{eventId}`). */
+  eventUrls: Record<string, string>;
+}
+
 function formatFlexRange(event: EventSummary): string {
   if (event.startDate === event.endDate) {
     return `${event.startDate} ${event.startTime} – ${event.endTime}`;
@@ -13,13 +20,19 @@ function formatFlexRange(event: EventSummary): string {
   return `${event.startDate} ${event.startTime} – ${event.endDate} ${event.endTime}`;
 }
 
-function bubble(event: EventSummary, liffUrl: string): Record<string, unknown> {
+function eventCtaLabel(event: EventSummary): string {
+  if (event.confirmedCount < event.capacity) return '查看並報名';
+  if (event.waitlistEnabled) return '查看並候補';
+  return '查看活動';
+}
+
+function eventBubble(event: EventSummary, detailUrl: string): Record<string, unknown> {
   return {
     type: 'bubble',
     size: 'kilo',
     action: {
       type: 'uri',
-      uri: liffUrl,
+      uri: detailUrl,
     },
     body: {
       type: 'box',
@@ -68,8 +81,8 @@ function bubble(event: EventSummary, liffUrl: string): Record<string, unknown> {
           color: '#0F6E6C',
           action: {
             type: 'uri',
-            label: '查看全部活動',
-            uri: liffUrl,
+            label: eventCtaLabel(event),
+            uri: detailUrl,
           },
         },
       ],
@@ -77,7 +90,64 @@ function bubble(event: EventSummary, liffUrl: string): Record<string, unknown> {
   };
 }
 
-export function buildEventCarousel(events: EventSummary[], liffUrl: string): LineFlexMessage {
+function listAllBubble(listUrl: string): Record<string, unknown> {
+  return {
+    type: 'bubble',
+    size: 'kilo',
+    body: {
+      type: 'box',
+      layout: 'vertical',
+      contents: [
+        {
+          type: 'text',
+          text: '查看全部活動',
+          weight: 'bold',
+          size: 'lg',
+          wrap: true,
+          color: '#14302E',
+        },
+        {
+          type: 'text',
+          text: '開啟 JoyIn 完整活動列表',
+          size: 'sm',
+          color: '#4A6462',
+          wrap: true,
+          margin: 'md',
+        },
+      ],
+    },
+    footer: {
+      type: 'box',
+      layout: 'vertical',
+      contents: [
+        {
+          type: 'button',
+          style: 'secondary',
+          action: {
+            type: 'uri',
+            label: '查看全部活動',
+            uri: listUrl,
+          },
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * Build /list Flex carousel.
+ * - Each event bubble URI → `/events/{eventId}`
+ * - Trailing bubble → `/events` (查看全部活動)
+ * - Empty state → `/events`
+ */
+export function buildEventCarousel(
+  events: EventSummary[],
+  urls: EventCarouselUrls | string,
+): LineFlexMessage {
+  // Backward-compatible: single string = list URL for every action (tests).
+  const listUrl = typeof urls === 'string' ? urls : urls.listUrl;
+  const eventUrls = typeof urls === 'string' ? {} : urls.eventUrls;
+
   if (events.length === 0) {
     return {
       type: 'flex',
@@ -115,7 +185,7 @@ export function buildEventCarousel(events: EventSummary[], liffUrl: string): Lin
               action: {
                 type: 'uri',
                 label: '開啟 JoyIn',
-                uri: liffUrl,
+                uri: listUrl,
               },
             },
           ],
@@ -124,12 +194,18 @@ export function buildEventCarousel(events: EventSummary[], liffUrl: string): Lin
     };
   }
 
+  const bubbles = events.map((event) => {
+    const detailUrl = eventUrls[event.eventId] || listUrl;
+    return eventBubble(event, detailUrl);
+  });
+  bubbles.push(listAllBubble(listUrl));
+
   return {
     type: 'flex',
     altText: '即將舉行的活動',
     contents: {
       type: 'carousel',
-      contents: events.map((event) => bubble(event, liffUrl)),
+      contents: bubbles,
     },
   };
 }

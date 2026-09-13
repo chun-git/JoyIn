@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { EventDetail, RegistrationRecord, TransferInviteCreated } from '../../../shared/types';
 import { api } from '../api';
 import { cancelListButtonLabel } from '../cancel-registration-copy';
@@ -101,9 +101,14 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
   const { eventId = '' } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [event, setEvent] = useState<EventDetail | null>(null);
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState(() =>
+    (location.state as { transferSuccess?: boolean } | null)?.transferSuccess
+      ? '你已成為此活動的主揪'
+      : '',
+  );
   const [proxyName, setProxyName] = useState('');
   const [invite, setInvite] = useState<TransferInviteCreated | null>(null);
   const [pending, setPending] = useState(false);
@@ -184,7 +189,7 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
 
       {/* 1. 返回活動列表 */}
       <div className="detail-back-row">
-        <BackToListButton onClick={() => navigate('/')} />
+        <BackToListButton onClick={() => navigate('/events')} />
       </div>
 
       {justCreated || justCopied ? (
@@ -313,7 +318,7 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
                 if (window.confirm('確定要刪除活動嗎？此為軟刪除，列表將不再顯示。')) {
                   void run(async () => {
                     await api.deleteEvent(session, eventId);
-                    navigate('/');
+                    navigate('/events');
                   }, '活動已刪除');
                 }
               }}

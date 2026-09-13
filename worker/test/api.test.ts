@@ -826,7 +826,41 @@ describe('organizer transfer invites', () => {
       method: 'POST',
       headers: authOnlyHeaders('U-bob', 'Bob'),
     });
-    expect(reused.status).toBe(409);
+    expect(reused.status).toBe(410);
+    expect((reused.body as { error?: string }).error).toBe('transfer_invite_used');
+  });
+
+  it('allows only one concurrent accepter for the same invite', async () => {
+    const created = await createEvent('U-lee', 'Lee', { name: '競態轉移' });
+    const eventId = created.body.event.eventId;
+    const invite = await json<{ invite: { token: string } }>(`/api/events/${eventId}/transfer-invites`, {
+      method: 'POST',
+      headers: await authHeaders('U-lee', 'Lee'),
+    });
+    const token = invite.body.invite.token;
+
+    const [a, b] = await Promise.all([
+      json<{ event?: { organizerLineUserId: string }; error?: string }>(
+        `/api/transfer-invites/${token}/accept`,
+        { method: 'POST', headers: authOnlyHeaders('U-amy', 'Amy') },
+      ),
+      json<{ event?: { organizerLineUserId: string }; error?: string }>(
+        `/api/transfer-invites/${token}/accept`,
+        { method: 'POST', headers: authOnlyHeaders('U-bob', 'Bob') },
+      ),
+    ]);
+
+    const statuses = [a.status, b.status].sort();
+    expect(statuses).toEqual([200, 410]);
+    const winner = a.status === 200 ? a : b;
+    const loser = a.status === 200 ? b : a;
+    expect(winner.body.event?.organizerLineUserId).toMatch(/^U-(amy|bob)$/);
+    expect(loser.body.error).toBe('transfer_invite_used');
+
+    const detail = await json<{ event: { organizerLineUserId: string } }>(`/api/events/${eventId}`, {
+      headers: await authHeaders(winner.body.event!.organizerLineUserId, 'Winner'),
+    });
+    expect(detail.body.event.organizerLineUserId).toBe(winner.body.event!.organizerLineUserId);
   });
 
   it('invalidates old links when cancelled or regenerated', async () => {
@@ -942,7 +976,16 @@ describe('copy event', () => {
       headers: await authHeaders('U-amy', 'Amy', 'G-other'),
       body: JSON.stringify(futureRange()),
     });
-    expect(copied.status).toBe(403);
+    expect(copied.status).toBe(404);
+  });
+
+  it('returns 404 for cross-group event detail without leaking existence', async () => {
+    const created = await createEvent('U-lee', 'Lee', { name: '跨群隱藏' });
+    const missing = await json(`/api/events/${created.body.event.eventId}`, {
+      headers: await authHeaders('U-amy', 'Amy', 'G-other'),
+    });
+    expect(missing.status).toBe(404);
+    expect((missing.body as { error?: string }).error).toBe('NOT_FOUND');
   });
 });
 
@@ -1022,6 +1065,10 @@ describe('LINE webhook', () => {
       const serialized = JSON.stringify(replies[0]);
       expect(serialized).toContain('context=');
       expect(serialized).toContain('https://liff.line.me/test-liff-id');
+      expect(serialized).toContain('/events/');
+      expect(serialized).toMatch(/liff\.line\.me\/test-liff-id\/events\//);
+      expect(serialized).toMatch(/liff\.line\.me\/test-liff-id\/events\?/);
+      expect(serialized).toContain('查看全部活動');
       expect(serialized).not.toContain('joyin-web.pages.dev/?context=');
       expect(serialized).not.toContain('external=true');
 

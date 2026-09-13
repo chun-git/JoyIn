@@ -90,7 +90,7 @@ function renderDetail() {
     <MemoryRouter initialEntries={['/events/e1']}>
       <Routes>
         <Route path="/events/:eventId" element={<EventDetailPage session={session} />} />
-        <Route path="/" element={<div>活動列表頁</div>} />
+        <Route path="/events" element={<div>活動列表頁</div>} />
         <Route path="/events/new" element={<div>新增活動頁</div>} />
         <Route path="/help/join" element={<div>報名手冊</div>} />
       </Routes>

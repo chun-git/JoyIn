@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Navigate, Route, Routes, useLocation, Link } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useNavigate, Link } from 'react-router-dom';
 import { StateBlock } from './components/StateBlock';
 import { SiteNav } from './components/SiteNav';
 import { AuthExpiredPanel } from './components/AuthExpiredPanel';
@@ -14,6 +14,7 @@ import {
   type LiffBootResult,
   type LiffSession,
 } from './liff';
+import { sanitizeJoyInRoute } from './liff-deep-link';
 import { EventCreatePage } from './pages/EventCreatePage';
 import { EventDetailPage } from './pages/EventDetailPage';
 import { EventEditPage } from './pages/EventEditPage';
@@ -93,37 +94,52 @@ function LiffApp() {
   const [canCloseWindow, setCanCloseWindow] = useState(false);
   const [booting, setBooting] = useState(true);
   const bootGenRef = useRef(0);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const restoredRouteRef = useRef(false);
 
-  const applyResult = useCallback((result: LiffBootResult, gen: number) => {
-    if (gen !== bootGenRef.current) return;
-    setPhase(result.phase);
-    if (result.status === 'ready' && result.session) {
-      setSession(result.session);
-      setBootError('');
-      setBootErrorCode('');
-      setCanRetry(false);
-      setCanCloseWindow(false);
-      setBooting(false);
-      return;
-    }
-    if (result.status === 'redirecting') {
-      // Legacy path — should not occur without manual liff.login().
+  const applyResult = useCallback(
+    (result: LiffBootResult, gen: number) => {
+      if (gen !== bootGenRef.current) return;
+      setPhase(result.phase);
+      if (result.status === 'ready' && result.session) {
+        setSession(result.session);
+        setBootError('');
+        setBootErrorCode('');
+        setCanRetry(false);
+        setCanCloseWindow(false);
+        setBooting(false);
+
+        const pending = sanitizeJoyInRoute(result.pendingRoute || '');
+        if (pending && !restoredRouteRef.current) {
+          restoredRouteRef.current = true;
+          const current = `${location.pathname}${location.search}`.split('?')[0];
+          if (pending !== current && pending !== location.pathname) {
+            navigate(pending, { replace: true });
+          }
+        }
+        return;
+      }
+      if (result.status === 'redirecting') {
+        // Legacy path — should not occur without manual liff.login().
+        setSession(null);
+        setBootError('');
+        setBootErrorCode('');
+        setCanRetry(false);
+        setCanCloseWindow(false);
+        setBooting(false);
+        setPhase('redirecting_login');
+        return;
+      }
       setSession(null);
-      setBootError('');
-      setBootErrorCode('');
-      setCanRetry(false);
-      setCanCloseWindow(false);
+      setBootError(result.error?.message || '無法開啟 JoyIn');
+      setBootErrorCode(result.error?.code || '');
+      setCanRetry(Boolean(result.canRetryLogin));
+      setCanCloseWindow(Boolean(result.canCloseWindow));
       setBooting(false);
-      setPhase('redirecting_login');
-      return;
-    }
-    setSession(null);
-    setBootError(result.error?.message || '無法開啟 JoyIn');
-    setBootErrorCode(result.error?.code || '');
-    setCanRetry(Boolean(result.canRetryLogin));
-    setCanCloseWindow(Boolean(result.canCloseWindow));
-    setBooting(false);
-  }, []);
+    },
+    [location.pathname, location.search, navigate],
+  );
 
   const boot = useCallback(
     (mode: 'auto' | 'retry' = 'auto') => {
@@ -219,6 +235,10 @@ function LiffApp() {
         <Route path="/transfer/:token" element={<TransferInvitePage session={session} />} />
         <Route
           path="/"
+          element={<Navigate to="/events" replace />}
+        />
+        <Route
+          path="/events"
           element={
             <GroupGate session={session}>
               <EventListPage session={session} onFlowPhase={setPhase} />
@@ -249,7 +269,7 @@ function LiffApp() {
             </GroupGate>
           }
         />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/events" replace />} />
       </Routes>
     </div>
   );

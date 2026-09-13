@@ -19,4 +19,10 @@ export const Errors = {
   validation: (message: string) => new AppError(400, 'VALIDATION', message),
   gone: (message = '活動已結束') => new AppError(410, 'GONE', message),
   payload: (message = '請求內容無效') => new AppError(400, 'INVALID_PAYLOAD', message),
+  transferInviteUsed: (message = '此主揪轉移連結已使用') =>
+    new AppError(410, 'transfer_invite_used', message),
+  transferInviteExpired: (message = '此主揪轉移連結已過期') =>
+    new AppError(410, 'transfer_invite_expired', message),
+  transferInviteInvalid: (message = '此主揪轉移連結已失效') =>
+    new AppError(410, 'transfer_invite_cancelled', message),
 };

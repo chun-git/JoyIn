@@ -238,8 +238,20 @@ export async function transferOrganizerRow(
   toLineUserId: string,
   toDisplayName: string,
   updatedAt: string,
-): Promise<void> {
-  await db
+  expectedFromLineUserId?: string,
+): Promise<boolean> {
+  if (expectedFromLineUserId) {
+    const result = await db
+      .prepare(
+        `UPDATE events
+         SET organizer_line_user_id = ?, organizer_display_name = ?, updated_at = ?
+         WHERE event_id = ? AND organizer_line_user_id = ? AND status != 'DELETED'`,
+      )
+      .bind(toLineUserId, toDisplayName, updatedAt, eventId, expectedFromLineUserId)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+  const result = await db
     .prepare(
       `UPDATE events
        SET organizer_line_user_id = ?, organizer_display_name = ?, updated_at = ?
@@ -247,6 +259,145 @@ export async function transferOrganizerRow(
     )
     .bind(toLineUserId, toDisplayName, updatedAt, eventId)
     .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+/**
+ * Atomically accept a transfer invite in one D1 batch (transaction).
+ * Later statements are gated on the invite having been accepted by this user,
+ * so a lost CAS on the invite cannot still transfer the organizer seat or write audit.
+ */
+export async function acceptTransferInviteAtomic(
+  db: D1Database,
+  values: {
+    inviteId: string;
+    eventId: string;
+    fromLineUserId: string;
+    fromDisplayName: string;
+    toLineUserId: string;
+    toDisplayName: string;
+    acceptedAt: string;
+    transferId: string;
+    nowIso: string;
+  },
+): Promise<{ inviteAccepted: boolean; organizerUpdated: boolean }> {
+  const results = await db.batch([
+    // 1) CAS: only one concurrent accepter can flip PENDING → ACCEPTED
+    db
+      .prepare(
+        `UPDATE organizer_transfer_invites
+         SET status = 'ACCEPTED',
+             accepted_at = ?,
+             accepted_by_line_user_id = ?,
+             accepted_by_display_name = ?
+         WHERE invite_id = ?
+           AND status = 'PENDING'
+           AND expires_at > ?`,
+      )
+      .bind(
+        values.acceptedAt,
+        values.toLineUserId,
+        values.toDisplayName,
+        values.inviteId,
+        values.nowIso,
+      ),
+    // 2) CAS organizer only if this invite is ACCEPTED by this user
+    db
+      .prepare(
+        `UPDATE events
+         SET organizer_line_user_id = ?, organizer_display_name = ?, updated_at = ?
+         WHERE event_id = ?
+           AND organizer_line_user_id = ?
+           AND status != 'DELETED'
+           AND EXISTS (
+             SELECT 1 FROM organizer_transfer_invites
+             WHERE invite_id = ?
+               AND status = 'ACCEPTED'
+               AND accepted_by_line_user_id = ?
+           )`,
+      )
+      .bind(
+        values.toLineUserId,
+        values.toDisplayName,
+        values.acceptedAt,
+        values.eventId,
+        values.fromLineUserId,
+        values.inviteId,
+        values.toLineUserId,
+      ),
+    // 3) Invalidate other pending invites only after this accept succeeded
+    db
+      .prepare(
+        `UPDATE organizer_transfer_invites
+         SET status = 'CANCELLED'
+         WHERE event_id = ?
+           AND status = 'PENDING'
+           AND invite_id != ?
+           AND EXISTS (
+             SELECT 1 FROM organizer_transfer_invites
+             WHERE invite_id = ?
+               AND status = 'ACCEPTED'
+               AND accepted_by_line_user_id = ?
+           )`,
+      )
+      .bind(values.eventId, values.inviteId, values.inviteId, values.toLineUserId),
+    // 4) Audit row only if organizer seat actually moved to accepter
+    db
+      .prepare(
+        `INSERT INTO organizer_transfers (
+          transfer_id, event_id, from_line_user_id, from_display_name,
+          to_line_user_id, to_display_name, created_at
+        )
+        SELECT ?, ?, ?, ?, ?, ?, ?
+        WHERE EXISTS (
+          SELECT 1 FROM events
+          WHERE event_id = ?
+            AND organizer_line_user_id = ?
+        )
+        AND EXISTS (
+          SELECT 1 FROM organizer_transfer_invites
+          WHERE invite_id = ?
+            AND status = 'ACCEPTED'
+            AND accepted_by_line_user_id = ?
+        )`,
+      )
+      .bind(
+        values.transferId,
+        values.eventId,
+        values.fromLineUserId,
+        values.fromDisplayName,
+        values.toLineUserId,
+        values.toDisplayName,
+        values.acceptedAt,
+        values.eventId,
+        values.toLineUserId,
+        values.inviteId,
+        values.toLineUserId,
+      ),
+  ]);
+
+  const inviteAccepted = (results[0]?.meta.changes ?? 0) > 0;
+  const organizerUpdated = (results[1]?.meta.changes ?? 0) > 0;
+
+  // If invite flipped but organizer CAS lost (should be rare), compensate invite.
+  if (inviteAccepted && !organizerUpdated) {
+    await db
+      .prepare(
+        `UPDATE organizer_transfer_invites
+         SET status = 'CANCELLED',
+             accepted_at = NULL,
+             accepted_by_line_user_id = NULL,
+             accepted_by_display_name = NULL
+         WHERE invite_id = ?
+           AND status = 'ACCEPTED'
+           AND accepted_by_line_user_id = ?`,
+      )
+      .bind(values.inviteId, values.toLineUserId)
+      .run();
+    return { inviteAccepted: false, organizerUpdated: false };
+  }
+
+  return { inviteAccepted, organizerUpdated };
 }
 
 export async function insertOrganizerTransfer(
