@@ -116,6 +116,11 @@ describe('flex carousel', () => {
     expect(serialized).toContain('查看並報名');
     expect(serialized).toContain('免費');
     expect(serialized).not.toContain('"label":"導航"');
+    expect(serialized).toContain('報名中・尚有名額');
+    expect(serialized).toContain('#0756A5');
+    expect(serialized).toContain('#149BE8');
+    expect(serialized).toContain('#F5FBFF');
+    expect(serialized).toContain('#12324A');
   });
 
   it('adds 導航 uri action with openExternalBrowser when maps URL exists', () => {
@@ -146,9 +151,11 @@ describe('flex carousel', () => {
     const serialized = JSON.stringify(filled);
     expect(serialized).toContain('150 元／人');
     expect(serialized).toContain('"label":"導航"');
+    expect(serialized).toContain('"text":"導航"');
     expect(serialized).toContain('maps.app.goo.gl/navDemo');
     expect(serialized).toContain('openExternalBrowser=1');
     expect(serialized).toContain('"type":"uri"');
+    expect(serialized).toContain('#35C7B5');
   });
 });
 
