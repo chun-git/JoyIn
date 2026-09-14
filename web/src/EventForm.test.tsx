@@ -138,6 +138,8 @@ describe('EventForm', () => {
         initial={{
           name: '週五桌遊夜',
           address: '台北車站',
+          googleMapsUrl: 'https://maps.app.goo.gl/copyMe',
+          feeAmount: 150,
           capacity: 8,
           waitlistEnabled: false,
         }}
@@ -148,6 +150,8 @@ describe('EventForm', () => {
 
     expect(view.getByDisplayValue('週五桌遊夜')).toBeInTheDocument();
     expect(view.getByDisplayValue('台北車站')).toBeInTheDocument();
+    expect(view.getByDisplayValue('https://maps.app.goo.gl/copyMe')).toBeInTheDocument();
+    expect(view.getByDisplayValue('150')).toBeInTheDocument();
     expect(view.getByDisplayValue('8')).toBeInTheDocument();
     expect(view.getByLabelText('開始日期')).toHaveValue('');
     expect(view.getByLabelText('結束日期')).toHaveValue('');
@@ -161,10 +165,62 @@ describe('EventForm', () => {
       expect.objectContaining({
         name: '週五桌遊夜',
         address: '台北車站',
+        googleMapsUrl: 'https://maps.app.goo.gl/copyMe',
+        feeAmount: 150,
         capacity: 8,
         waitlistEnabled: false,
         startDate: '2026-12-20',
         endDate: '2026-12-20',
+      }),
+      false,
+    );
+  });
+
+  it('rejects invalid maps URL and non-integer fees on the client', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const onSubmit = vi.fn();
+    render(<EventForm submitLabel="建立活動" onSubmit={onSubmit} />);
+
+    await user.type(screen.getByLabelText('活動名稱'), '驗證欄位');
+    await user.type(screen.getByLabelText('活動地址'), '台北');
+    setField('開始日期', '2026-12-01');
+    setField('開始時間', '19:00');
+    setField('結束時間', '21:00');
+    setField('Google Maps 網址（選填）', 'https://example.com/not-maps');
+    await user.click(screen.getByRole('button', { name: '建立活動' }));
+    expect(await screen.findByText(/僅接受 Google Maps/)).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    setField('Google Maps 網址（選填）', '');
+    setField('每人費用', '12.5');
+    await user.click(screen.getByRole('button', { name: '建立活動' }));
+    expect(await screen.findByText(/需為整數/)).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    setField('每人費用', '-3');
+    await user.click(screen.getByRole('button', { name: '建立活動' }));
+    expect(await screen.findByText(/0 到/)).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('submits free fee and optional maps URL', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(<EventForm submitLabel="建立活動" onSubmit={onSubmit} />);
+
+    await user.type(screen.getByLabelText('活動名稱'), '免費活動');
+    await user.type(screen.getByLabelText('活動地址'), '台北');
+    setField('開始日期', '2026-12-01');
+    setField('開始時間', '19:00');
+    setField('結束時間', '21:00');
+    setField('每人費用', '0');
+    setField('Google Maps 網址（選填）', 'https://www.google.com/maps?q=台北');
+    await user.click(screen.getByRole('button', { name: '建立活動' }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        feeAmount: 0,
+        googleMapsUrl: 'https://www.google.com/maps?q=台北',
       }),
       false,
     );

@@ -30,6 +30,8 @@ export function EventCreatePage({ session }: { session: LiffSession }) {
         setCopyInitial({
           name: result.event.name,
           address: result.event.address,
+          googleMapsUrl: result.event.googleMapsUrl,
+          feeAmount: result.event.feeAmount,
           capacity: result.event.capacity,
           waitlistEnabled: result.event.waitlistEnabled,
         });
@@ -68,7 +70,7 @@ export function EventCreatePage({ session }: { session: LiffSession }) {
         </button>
       </div>
       {copyId ? (
-        <p className="hint">已帶入名稱、地址與人數設定。報名名單、主揪轉移資料與舊活動 ID 不會複製。</p>
+        <p className="hint">已帶入名稱、地址、Google Maps 網址、費用與人數設定。報名名單、主揪轉移資料與舊活動 ID 不會複製。</p>
       ) : null}
       <EventForm
         initial={copyInitial ?? undefined}

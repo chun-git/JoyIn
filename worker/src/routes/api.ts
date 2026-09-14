@@ -9,6 +9,8 @@ import {
   requireBoolean,
   requireCapacity,
   requireDate,
+  requireFeeAmount,
+  requireGoogleMapsUrl,
   requireGroupId,
   requireString,
   requireTime,
@@ -119,6 +121,8 @@ api.post('/events', async (c) => {
   const event = await createEvent(c.env.DB, groupId, userOf(c), {
     name: requireString(body.name, '活動名稱', 1, 50),
     address: requireString(body.address, '活動地址', 1, 120),
+    googleMapsUrl: requireGoogleMapsUrl(body.googleMapsUrl),
+    feeAmount: requireFeeAmount(body.feeAmount ?? 0),
     capacity: requireCapacity(body.capacity),
     waitlistEnabled: requireBoolean(body.waitlistEnabled, '是否開放候補'),
     startDate: range.startDate,
@@ -145,6 +149,8 @@ api.patch('/events/:eventId', async (c) => {
   if (body.endDate !== undefined) input.endDate = requireDate(body.endDate, '結束日期');
   if (body.endTime !== undefined) input.endTime = requireTime(body.endTime, '結束時間');
   if (body.address !== undefined) input.address = requireString(body.address, '活動地址', 1, 120);
+  if (body.googleMapsUrl !== undefined) input.googleMapsUrl = requireGoogleMapsUrl(body.googleMapsUrl);
+  if (body.feeAmount !== undefined) input.feeAmount = requireFeeAmount(body.feeAmount);
   if (body.capacity !== undefined) input.capacity = requireCapacity(body.capacity);
   if (body.waitlistEnabled !== undefined) {
     input.waitlistEnabled = requireBoolean(body.waitlistEnabled, '是否開放候補');
@@ -203,6 +209,8 @@ api.post('/events/:eventId/copy', async (c) => {
   };
   if (body.name !== undefined) input.name = requireString(body.name, '活動名稱', 1, 50);
   if (body.address !== undefined) input.address = requireString(body.address, '活動地址', 1, 120);
+  if (body.googleMapsUrl !== undefined) input.googleMapsUrl = requireGoogleMapsUrl(body.googleMapsUrl);
+  if (body.feeAmount !== undefined) input.feeAmount = requireFeeAmount(body.feeAmount);
   if (body.capacity !== undefined) input.capacity = requireCapacity(body.capacity);
   if (body.waitlistEnabled !== undefined) {
     input.waitlistEnabled = requireBoolean(body.waitlistEnabled, '是否開放候補');

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { CreateEventInput } from '../../../shared/types';
 import { addOneMinute, taipeiParts, validateEventSchedule } from '@shared/datetime';
+import { parseFeeAmount, parseGoogleMapsUrl } from '@shared/event-fields';
 
 export function EventForm({
   initial,
@@ -21,6 +22,8 @@ export function EventForm({
   const [endTime, setEndTime] = useState(initial?.endTime ?? '21:00');
   const [endDateTouched, setEndDateTouched] = useState(Boolean(initial?.endDate));
   const [address, setAddress] = useState(initial?.address ?? '');
+  const [googleMapsUrl, setGoogleMapsUrl] = useState(initial?.googleMapsUrl ?? '');
+  const [feeAmount, setFeeAmount] = useState(String(initial?.feeAmount ?? 0));
   const [capacity, setCapacity] = useState(String(initial?.capacity ?? 10));
   const [waitlistEnabled, setWaitlistEnabled] = useState(initial?.waitlistEnabled ?? true);
   const [error, setError] = useState('');
@@ -36,6 +39,8 @@ export function EventForm({
     setEndTime(initial?.endTime ?? '21:00');
     setEndDateTouched(Boolean(initial?.endDate));
     setAddress(initial?.address ?? '');
+    setGoogleMapsUrl(initial?.googleMapsUrl ?? '');
+    setFeeAmount(String(initial?.feeAmount ?? 0));
     setCapacity(String(initial?.capacity ?? 10));
     setWaitlistEnabled(initial?.waitlistEnabled ?? true);
   }, [initial]);
@@ -66,6 +71,12 @@ export function EventForm({
     );
     if (!schedule.ok) return setError(schedule.message);
     if (!address.trim()) return setError('請填寫活動地址');
+
+    const mapsParsed = parseGoogleMapsUrl(googleMapsUrl);
+    if (!mapsParsed.ok) return setError(mapsParsed.message);
+    const feeParsed = parseFeeAmount(feeAmount);
+    if (!feeParsed.ok) return setError(feeParsed.message);
+
     if (!Number.isInteger(parsedCapacity) || parsedCapacity < 1) {
       return setError('人數上限需為大於 0 的整數');
     }
@@ -77,6 +88,8 @@ export function EventForm({
       endDate,
       endTime,
       address: address.trim(),
+      googleMapsUrl: mapsParsed.value,
+      feeAmount: feeParsed.value,
       capacity: parsedCapacity,
       waitlistEnabled,
     };
@@ -87,7 +100,8 @@ export function EventForm({
         next.startTime !== initial?.startTime ||
         next.endDate !== initial?.endDate ||
         next.endTime !== initial?.endTime ||
-        next.address !== initial?.address);
+        next.address !== initial?.address ||
+        (next.googleMapsUrl ?? null) !== (initial?.googleMapsUrl ?? null));
 
     if (timeOrPlaceChanged && !window.confirm('時間或地點即將變更，確定要更新活動嗎？')) {
       return;
@@ -189,6 +203,40 @@ export function EventForm({
           required
         />
       </label>
+      <label className="field" htmlFor="event-google-maps-url">
+        <span>Google Maps 網址（選填）</span>
+        <input
+          id="event-google-maps-url"
+          type="text"
+          inputMode="url"
+          autoComplete="off"
+          placeholder="https://maps.app.goo.gl/…"
+          value={googleMapsUrl}
+          onChange={(e) => setGoogleMapsUrl(e.target.value)}
+          maxLength={500}
+        />
+      </label>
+      <div className="field">
+        <label htmlFor="event-fee-amount">每人費用</label>
+        <div className="field-with-suffix">
+          <input
+            id="event-fee-amount"
+            type="text"
+            inputMode="numeric"
+            autoComplete="off"
+            value={feeAmount}
+            onChange={(e) => setFeeAmount(e.target.value)}
+            required
+            aria-describedby="event-fee-hint"
+          />
+          <span className="field-suffix" aria-hidden="true">
+            元／人
+          </span>
+        </div>
+        <p id="event-fee-hint" className="hint">
+          0 代表免費；僅可輸入整數
+        </p>
+      </div>
       <label className="field" htmlFor="event-capacity">
         <span>正式報名人數上限</span>
         <input

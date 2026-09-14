@@ -2,6 +2,7 @@ import type { Context } from 'hono';
 import type { AppEnv, AuthUser } from '../env';
 import { AppError, Errors } from './errors';
 import { DATE_RE, TIME_RE, toEventAt, validateEventSchedule } from './datetime';
+import { parseFeeAmount, parseGoogleMapsUrl } from '../../../shared/event-fields';
 import { GROUP_CONTEXT_REQUIRED_MESSAGE } from '../middleware/auth';
 
 /** Group id must come from a verified LIFF context token (set by liffAuth). */
@@ -44,6 +45,20 @@ export function requireBoolean(value: unknown, field: string): boolean {
     return value;
   }
   throw Errors.validation(`${field} 需為布林值`);
+}
+
+/** Optional Google Maps URL; empty → null. */
+export function requireGoogleMapsUrl(value: unknown): string | null {
+  const parsed = parseGoogleMapsUrl(value);
+  if (!parsed.ok) throw Errors.validation(parsed.message);
+  return parsed.value;
+}
+
+/** Per-person fee in TWD; integer ≥ 0. */
+export function requireFeeAmount(value: unknown): number {
+  const parsed = parseFeeAmount(value);
+  if (!parsed.ok) throw Errors.validation(parsed.message);
+  return parsed.value;
 }
 
 export function requireDate(value: unknown, field = '活動日期'): string {

@@ -1,4 +1,5 @@
 import type { EventSummary } from '../../../shared/types';
+import { formatFeeLabel, withOpenExternalBrowser } from '../../../shared/event-fields';
 
 export interface LineFlexMessage {
   type: 'flex';
@@ -27,6 +28,70 @@ function eventCtaLabel(event: EventSummary): string {
 }
 
 function eventBubble(event: EventSummary, detailUrl: string): Record<string, unknown> {
+  const bodyContents: Record<string, unknown>[] = [
+    {
+      type: 'text',
+      text: event.name,
+      weight: 'bold',
+      size: 'lg',
+      wrap: true,
+      color: '#14302E',
+    },
+    {
+      type: 'text',
+      text: `📅 ${formatFlexRange(event)}`,
+      size: 'sm',
+      color: '#4A6462',
+      wrap: true,
+      margin: 'md',
+    },
+    {
+      type: 'text',
+      text: `📍 ${event.address}`,
+      size: 'sm',
+      color: '#4A6462',
+      wrap: true,
+    },
+    {
+      type: 'text',
+      text: `💰 ${formatFeeLabel(event.feeAmount)}`,
+      size: 'sm',
+      color: '#4A6462',
+      wrap: true,
+    },
+    {
+      type: 'text',
+      text: `👥 ${event.confirmedCount}／${event.capacity}`,
+      size: 'sm',
+      color: '#0F6E6C',
+      weight: 'bold',
+    },
+  ];
+
+  const footerContents: Record<string, unknown>[] = [];
+  if (event.googleMapsUrl) {
+    footerContents.push({
+      type: 'button',
+      style: 'secondary',
+      height: 'sm',
+      action: {
+        type: 'uri',
+        label: '導航',
+        uri: withOpenExternalBrowser(event.googleMapsUrl),
+      },
+    });
+  }
+  footerContents.push({
+    type: 'button',
+    style: 'primary',
+    color: '#0F6E6C',
+    action: {
+      type: 'uri',
+      label: eventCtaLabel(event),
+      uri: detailUrl,
+    },
+  });
+
   return {
     type: 'bubble',
     size: 'kilo',
@@ -38,54 +103,13 @@ function eventBubble(event: EventSummary, detailUrl: string): Record<string, unk
       type: 'box',
       layout: 'vertical',
       spacing: 'sm',
-      contents: [
-        {
-          type: 'text',
-          text: event.name,
-          weight: 'bold',
-          size: 'lg',
-          wrap: true,
-          color: '#14302E',
-        },
-        {
-          type: 'text',
-          text: `📅 ${formatFlexRange(event)}`,
-          size: 'sm',
-          color: '#4A6462',
-          wrap: true,
-          margin: 'md',
-        },
-        {
-          type: 'text',
-          text: `📍 ${event.address}`,
-          size: 'sm',
-          color: '#4A6462',
-          wrap: true,
-        },
-        {
-          type: 'text',
-          text: `👥 ${event.confirmedCount}／${event.capacity}`,
-          size: 'sm',
-          color: '#0F6E6C',
-          weight: 'bold',
-        },
-      ],
+      contents: bodyContents,
     },
     footer: {
       type: 'box',
       layout: 'vertical',
-      contents: [
-        {
-          type: 'button',
-          style: 'primary',
-          color: '#0F6E6C',
-          action: {
-            type: 'uri',
-            label: eventCtaLabel(event),
-            uri: detailUrl,
-          },
-        },
-      ],
+      spacing: 'sm',
+      contents: footerContents,
     },
   };
 }
@@ -139,6 +163,7 @@ function listAllBubble(listUrl: string): Record<string, unknown> {
  * - Each event bubble URI → `/events/{eventId}`
  * - Trailing bubble → `/events` (查看全部活動)
  * - Empty state → `/events`
+ * - Optional「導航」uses uri action + openExternalBrowser (maps outside LIFF)
  */
 export function buildEventCarousel(
   events: EventSummary[],

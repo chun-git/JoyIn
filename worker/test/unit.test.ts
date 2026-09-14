@@ -91,6 +91,8 @@ describe('flex carousel', () => {
       startAt: '2026-12-01T11:00:00.000Z',
       endAt: '2026-12-01T13:00:00.000Z',
       address: '台北',
+      googleMapsUrl: null,
+      feeAmount: 0,
       capacity: 10,
       waitlistEnabled: true,
       status: 'OPEN',
@@ -105,12 +107,48 @@ describe('flex carousel', () => {
       listUrl: 'https://liff.line.me/test/events?context=a.b',
       eventUrls: { e1: 'https://liff.line.me/test/events/e1?context=a.b' },
     });
-    expect(JSON.stringify(filled)).toContain('桌遊夜');
-    expect(JSON.stringify(filled)).toContain('3／10');
-    expect(JSON.stringify(filled)).toContain('2026-12-01 19:00 – 21:00');
-    expect(JSON.stringify(filled)).toContain('https://liff.line.me/test/events/e1');
-    expect(JSON.stringify(filled)).toContain('查看全部活動');
-    expect(JSON.stringify(filled)).toContain('查看並報名');
+    const serialized = JSON.stringify(filled);
+    expect(serialized).toContain('桌遊夜');
+    expect(serialized).toContain('3／10');
+    expect(serialized).toContain('2026-12-01 19:00 – 21:00');
+    expect(serialized).toContain('https://liff.line.me/test/events/e1');
+    expect(serialized).toContain('查看全部活動');
+    expect(serialized).toContain('查看並報名');
+    expect(serialized).toContain('免費');
+    expect(serialized).not.toContain('"label":"導航"');
+  });
+
+  it('adds 導航 uri action with openExternalBrowser when maps URL exists', () => {
+    const event: EventSummary = {
+      eventId: 'e2',
+      groupId: 'g1',
+      name: '付費活動',
+      startDate: '2026-12-01',
+      startTime: '19:00',
+      endDate: '2026-12-01',
+      endTime: '21:00',
+      startAt: '2026-12-01T11:00:00.000Z',
+      endAt: '2026-12-01T13:00:00.000Z',
+      address: '台北車站',
+      googleMapsUrl: 'https://maps.app.goo.gl/navDemo',
+      feeAmount: 150,
+      capacity: 10,
+      waitlistEnabled: true,
+      status: 'OPEN',
+      confirmedCount: 1,
+      waitlistCount: 0,
+      organizerLineUserId: 'U1',
+      organizerDisplayName: 'Lee',
+      createdAt: '2026-09-10T00:00:00.000Z',
+      updatedAt: '2026-09-10T00:00:00.000Z',
+    };
+    const filled = buildEventCarousel([event], 'https://liff.line.me/test');
+    const serialized = JSON.stringify(filled);
+    expect(serialized).toContain('150 元／人');
+    expect(serialized).toContain('"label":"導航"');
+    expect(serialized).toContain('maps.app.goo.gl/navDemo');
+    expect(serialized).toContain('openExternalBrowser=1');
+    expect(serialized).toContain('"type":"uri"');
   });
 });
 

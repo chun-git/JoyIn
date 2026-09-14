@@ -59,6 +59,8 @@ export function EventEditPage({ session }: { session: LiffSession }) {
           endDate: event.endDate,
           endTime: event.endTime,
           address: event.address,
+          googleMapsUrl: event.googleMapsUrl,
+          feeAmount: event.feeAmount,
           capacity: event.capacity,
           waitlistEnabled: event.waitlistEnabled,
         }}

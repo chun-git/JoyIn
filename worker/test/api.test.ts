@@ -338,6 +338,60 @@ describe('events API', () => {
     expect(reversed.status).toBe(400);
   });
 
+  it('accepts free/paid fees and Google Maps URL; rejects invalid values', async () => {
+    const free = await createEvent('U-lee', 'Lee', {
+      name: '免費無地圖',
+      feeAmount: 0,
+      googleMapsUrl: null,
+    });
+    expect(free.status).toBe(201);
+    expect(free.body.event.feeAmount).toBe(0);
+    expect(free.body.event.googleMapsUrl).toBeNull();
+
+    const paid = await createEvent('U-lee', 'Lee', {
+      name: '付費有地圖',
+      feeAmount: 150,
+      googleMapsUrl: 'https://maps.app.goo.gl/joyin',
+    });
+    expect(paid.status).toBe(201);
+    expect(paid.body.event.feeAmount).toBe(150);
+    expect(paid.body.event.googleMapsUrl).toBe('https://maps.app.goo.gl/joyin');
+
+    const listed = await json<{ events: Array<{ name: string; feeAmount: number; googleMapsUrl: string | null }> }>(
+      '/api/events',
+      { headers: await authHeaders('U-lee', 'Lee') },
+    );
+    const paidListed = listed.body.events.find((e) => e.name === '付費有地圖');
+    expect(paidListed?.feeAmount).toBe(150);
+    expect(paidListed?.googleMapsUrl).toBe('https://maps.app.goo.gl/joyin');
+
+    const badFee = await createEvent('U-lee', 'Lee', { name: '小數費用', feeAmount: 1.5 });
+    expect(badFee.status).toBe(400);
+    const negFee = await createEvent('U-lee', 'Lee', { name: '負費用', feeAmount: -1 });
+    expect(negFee.status).toBe(400);
+    const badMaps = await createEvent('U-lee', 'Lee', {
+      name: '假地圖',
+      googleMapsUrl: 'https://example.com/maps',
+    });
+    expect(badMaps.status).toBe(400);
+
+    const patched = await json<{ event: { feeAmount: number; googleMapsUrl: string | null } }>(
+      `/api/events/${paid.body.event.eventId}`,
+      {
+        method: 'PATCH',
+        headers: await authHeaders('U-lee', 'Lee'),
+        body: JSON.stringify({
+          feeAmount: 80,
+          googleMapsUrl: 'https://www.google.com/maps?q=台中',
+          confirmTimeLocationChange: true,
+        }),
+      },
+    );
+    expect(patched.status).toBe(200);
+    expect(patched.body.event.feeAmount).toBe(80);
+    expect(patched.body.event.googleMapsUrl).toBe('https://www.google.com/maps?q=台中');
+  });
+
   it('persists created events in D1 and still returns them after a new query', async () => {
     const { env } = await import('cloudflare:test');
     const created = await createEvent('U-lee', 'Lee', { name: '持久化活動' });
@@ -923,10 +977,14 @@ describe('copy event', () => {
     const created = await createEvent('U-lee', 'Lee', {
       name: '原活動',
       address: '台北車站',
+      googleMapsUrl: 'https://maps.app.goo.gl/source',
+      feeAmount: 200,
       capacity: 4,
       waitlistEnabled: false,
     });
     const eventId = created.body.event.eventId;
+    expect(created.body.event.googleMapsUrl).toBe('https://maps.app.goo.gl/source');
+    expect(created.body.event.feeAmount).toBe(200);
     await json(`/api/events/${eventId}/join`, {
       method: 'POST',
       headers: await authHeaders('U-amy', 'Amy'),
@@ -938,6 +996,8 @@ describe('copy event', () => {
         groupId: string;
         name: string;
         address: string;
+        googleMapsUrl: string | null;
+        feeAmount: number;
         capacity: number;
         waitlistEnabled: boolean;
         organizerLineUserId: string;
@@ -958,6 +1018,8 @@ describe('copy event', () => {
     expect(copied.body.event.groupId).toBe('G-test-group');
     expect(copied.body.event.name).toBe('原活動');
     expect(copied.body.event.address).toBe('台北車站');
+    expect(copied.body.event.googleMapsUrl).toBe('https://maps.app.goo.gl/source');
+    expect(copied.body.event.feeAmount).toBe(200);
     expect(copied.body.event.capacity).toBe(4);
     expect(copied.body.event.waitlistEnabled).toBe(false);
     expect(copied.body.event.organizerLineUserId).toBe('U-amy');

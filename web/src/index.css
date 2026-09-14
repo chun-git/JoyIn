@@ -147,6 +147,7 @@ h1, h2, h3, p, li, label, .hint, .meta, .brand {
   gap: 10px;
   width: 100%;
   min-width: 0;
+  max-width: 100%;
   height: auto;
   padding: 18px;
   background: var(--paper);
@@ -157,10 +158,28 @@ h1, h2, h3, p, li, label, .hint, .meta, .brand {
   white-space: normal;
   overflow-wrap: anywhere;
 }
-button.event-card {
+button.event-card,
+button.event-card-main {
   font: inherit;
   color: inherit;
   cursor: pointer;
+}
+.event-card-interactive {
+  padding: 0;
+  overflow: hidden;
+}
+.event-card-main {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 18px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .event-card h2, .event-card h3 {
   margin: 0;
@@ -172,6 +191,51 @@ button.event-card {
   gap: 6px;
   color: var(--muted);
   font-size: 15px;
+  min-width: 0;
+}
+.event-location-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.event-location-text {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.event-nav-link {
+  flex: 0 0 auto;
+  color: var(--teal, #0f6e6c);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.event-nav-link-footer {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 10px 18px 16px;
+  border-top: 1px solid rgba(15, 110, 108, 0.08);
+  text-align: center;
+}
+.field-with-suffix {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.field-with-suffix input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.field-suffix {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 14px;
+  white-space: nowrap;
 }
 .badge-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .badge {

@@ -14,6 +14,10 @@ export interface EventSummary {
   startAt: string;
   endAt: string;
   address: string;
+  /** Optional Google Maps https URL; null when unset. */
+  googleMapsUrl: string | null;
+  /** Per-person fee in TWD; 0 means free. */
+  feeAmount: number;
   capacity: number;
   waitlistEnabled: boolean;
   status: EventStatus;
@@ -62,6 +66,8 @@ export interface EventTimeRangeInput {
 export interface CreateEventInput extends EventTimeRangeInput {
   name: string;
   address: string;
+  googleMapsUrl: string | null;
+  feeAmount: number;
   capacity: number;
   waitlistEnabled: boolean;
 }
@@ -73,6 +79,8 @@ export interface UpdateEventInput extends Partial<CreateEventInput> {
 export interface CopyEventInput extends EventTimeRangeInput {
   name?: string;
   address?: string;
+  googleMapsUrl?: string | null;
+  feeAmount?: number;
   capacity?: number;
   waitlistEnabled?: boolean;
 }

@@ -11,6 +11,8 @@ export const sampleEvent: EventSummary = {
   startAt: '2026-12-01T11:00:00.000Z',
   endAt: '2026-12-01T13:00:00.000Z',
   address: '台北市中山區',
+  googleMapsUrl: null,
+  feeAmount: 0,
   capacity: 10,
   waitlistEnabled: true,
   status: 'OPEN',

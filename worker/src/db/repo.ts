@@ -12,6 +12,8 @@ export interface EventRow {
   start_at: string | null;
   end_at: string | null;
   address: string;
+  google_maps_url: string | null;
+  fee_amount: number | null;
   capacity: number;
   waitlist_enabled: number;
   status: EventStatus;
@@ -71,6 +73,11 @@ export function toEventSummary(row: EventRow): EventSummary {
     startAt,
     endAt,
     address: row.address,
+    googleMapsUrl:
+      typeof row.google_maps_url === 'string' && row.google_maps_url.trim()
+        ? row.google_maps_url.trim()
+        : null,
+    feeAmount: Number.isFinite(Number(row.fee_amount)) ? Math.trunc(Number(row.fee_amount)) : 0,
     capacity: Number(row.capacity) || 0,
     waitlistEnabled: asBoolean(row.waitlist_enabled),
     status: row.status,
@@ -147,6 +154,8 @@ export async function insertEvent(
     endTime: string;
     endAt: string;
     address: string;
+    googleMapsUrl: string | null;
+    feeAmount: number;
     capacity: number;
     waitlistEnabled: boolean;
     organizerLineUserId: string;
@@ -158,9 +167,9 @@ export async function insertEvent(
     .prepare(
       `INSERT INTO events (
         event_id, group_id, name, event_date, event_time, event_at, start_at, end_at, address,
-        capacity, waitlist_enabled, status, organizer_line_user_id,
+        google_maps_url, fee_amount, capacity, waitlist_enabled, status, organizer_line_user_id,
         organizer_display_name, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)`,
     )
     .bind(
       values.eventId,
@@ -172,6 +181,8 @@ export async function insertEvent(
       values.startAt,
       values.endAt,
       values.address,
+      values.googleMapsUrl,
+      values.feeAmount,
       values.capacity,
       values.waitlistEnabled ? 1 : 0,
       values.organizerLineUserId,
@@ -192,6 +203,8 @@ export async function updateEventRow(
     startAt: string;
     endAt: string;
     address: string;
+    googleMapsUrl: string | null;
+    feeAmount: number;
     capacity: number;
     waitlistEnabled: boolean;
     updatedAt: string;
@@ -201,7 +214,8 @@ export async function updateEventRow(
     .prepare(
       `UPDATE events
        SET name = ?, event_date = ?, event_time = ?, event_at = ?, start_at = ?, end_at = ?,
-           address = ?, capacity = ?, waitlist_enabled = ?, updated_at = ?
+           address = ?, google_maps_url = ?, fee_amount = ?, capacity = ?, waitlist_enabled = ?,
+           updated_at = ?
        WHERE event_id = ?`,
     )
     .bind(
@@ -212,6 +226,8 @@ export async function updateEventRow(
       patch.startAt,
       patch.endAt,
       patch.address,
+      patch.googleMapsUrl,
+      patch.feeAmount,
       patch.capacity,
       patch.waitlistEnabled ? 1 : 0,
       patch.updatedAt,

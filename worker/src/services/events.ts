@@ -130,6 +130,8 @@ export async function createEvent(
     endTime: input.endTime,
     endAt,
     address: input.address,
+    googleMapsUrl: input.googleMapsUrl,
+    feeAmount: input.feeAmount,
     capacity: input.capacity,
     waitlistEnabled: input.waitlistEnabled,
     organizerLineUserId: user.lineUserId,
@@ -167,6 +169,9 @@ export async function updateEvent(
     endDate: input.endDate ?? current.endDate,
     endTime: input.endTime ?? current.endTime,
     address: input.address ?? row.address,
+    googleMapsUrl:
+      input.googleMapsUrl !== undefined ? input.googleMapsUrl : current.googleMapsUrl,
+    feeAmount: input.feeAmount !== undefined ? input.feeAmount : current.feeAmount,
     capacity: input.capacity ?? row.capacity,
     waitlistEnabled: input.waitlistEnabled ?? Boolean(row.waitlist_enabled),
   };
@@ -177,7 +182,10 @@ export async function updateEvent(
     : preview;
 
   const timeOrLocationChanged =
-    startAt !== startAtOf(row) || endAt !== endAtOf(row) || next.address !== row.address;
+    startAt !== startAtOf(row) ||
+    endAt !== endAtOf(row) ||
+    next.address !== row.address ||
+    (next.googleMapsUrl ?? null) !== (current.googleMapsUrl ?? null);
 
   if (timeOrLocationChanged && !input.confirmTimeLocationChange) {
     throw Errors.validation('修改時間或地點前請先確認');
@@ -199,6 +207,8 @@ export async function updateEvent(
     startAt,
     endAt,
     address: next.address,
+    googleMapsUrl: next.googleMapsUrl,
+    feeAmount: next.feeAmount,
     capacity: next.capacity,
     waitlistEnabled: next.waitlistEnabled,
     updatedAt: nowIso(),
@@ -256,6 +266,18 @@ export async function copyEvent(
   return createEvent(db, source.group_id, user, {
     name: input.name ?? source.name,
     address: input.address ?? source.address,
+    googleMapsUrl:
+      input.googleMapsUrl !== undefined
+        ? input.googleMapsUrl
+        : typeof source.google_maps_url === 'string' && source.google_maps_url.trim()
+          ? source.google_maps_url.trim()
+          : null,
+    feeAmount:
+      input.feeAmount !== undefined
+        ? input.feeAmount
+        : Number.isFinite(Number(source.fee_amount))
+          ? Math.trunc(Number(source.fee_amount))
+          : 0,
     capacity: input.capacity ?? source.capacity,
     waitlistEnabled: input.waitlistEnabled ?? Boolean(source.waitlist_enabled),
     startDate: input.startDate,
