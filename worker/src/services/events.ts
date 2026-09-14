@@ -20,7 +20,10 @@ import {
   type GroupMemberRow,
 } from '../db/repo';
 import type { AuthUser } from '../env';
-import { resolvePreselectedMembers } from './group-members';
+import {
+  resolvePreselectedMembers,
+  resolvePreselectedProxyNames,
+} from './group-members';
 
 function endAtOf(row: { end_at: string | null; event_at: string }): string {
   return row.end_at || row.event_at;
@@ -135,33 +138,26 @@ export async function createEvent(
 
   const rawIds = input.preselectedMemberIds ?? [];
   const uniqueIds = [...new Set(rawIds.map((id) => id.trim()).filter(Boolean))];
-  if (uniqueIds.length > input.capacity) {
+  const preselectedProxies = resolvePreselectedProxyNames(input.preselectedProxyNames ?? []);
+  const preselectTotal = uniqueIds.length + preselectedProxies.length;
+  if (preselectTotal > input.capacity) {
     throw Errors.validation(
-      `預先報名人數（${uniqueIds.length}）不可超過正式報名上限（${input.capacity}）`,
+      `預先報名人數（${preselectTotal}）不可超過正式報名上限（${input.capacity}）`,
     );
   }
 
   let preselected = options?.preselectedMembers ?? [];
   if (uniqueIds.length > 0 && preselected.length === 0) {
-    const token = options?.channelAccessToken || '';
-    if (!token) {
-      throw Errors.groupMembersUnavailable();
-    }
     preselected = await resolvePreselectedMembers(
       db,
       groupId,
       uniqueIds,
-      token,
+      options?.channelAccessToken || '',
       options?.fetchImpl ?? fetch,
     );
   }
   if (uniqueIds.length > 0 && preselected.length !== uniqueIds.length) {
-    throw Errors.validation('部分預選成員不在目前群組名單中，請重新整理後再試');
-  }
-  if (preselected.length > input.capacity) {
-    throw Errors.validation(
-      `預先報名人數（${preselected.length}）不可超過正式報名上限（${input.capacity}）`,
-    );
+    throw Errors.validation('部分預選成員無法辨識，請重新整理後再試');
   }
 
   const eventValues = {
@@ -203,13 +199,31 @@ export async function createEvent(
       }),
     );
   }
+  for (const proxyName of preselectedProxies) {
+    statements.push(
+      prepareInsertRegistrationStatement(db, {
+        registrationId: newId(),
+        eventId,
+        type: 'PROXY',
+        status: 'CONFIRMED',
+        waitlistPosition: null,
+        participantName: proxyName,
+        lineUserId: null,
+        createdByLineUserId: user.lineUserId,
+        createdByDisplayName: user.displayName,
+        createdAt,
+        registrationSource: 'PROXY',
+        participantLineUserId: null,
+      }),
+    );
+  }
 
   try {
     await db.batch(statements);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('UNIQUE') || message.includes('unique')) {
-      throw Errors.conflict('預選成員中有人已報名，請調整後再試');
+      throw Errors.conflict('預選名單有重複成員或代報名稱，請調整後再試');
     }
     throw error;
   }
@@ -368,6 +382,7 @@ export async function copyEvent(
       endDate: input.endDate,
       endTime: input.endTime,
       preselectedMemberIds: input.preselectedMemberIds ?? [],
+      preselectedProxyNames: input.preselectedProxyNames ?? [],
     },
     options,
   );

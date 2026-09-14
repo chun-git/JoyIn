@@ -15,12 +15,15 @@ export function EventCreatePage({ session }: { session: LiffSession }) {
   const [copyError, setCopyError] = useState('');
   const [copyLoading, setCopyLoading] = useState(Boolean(copyId));
   const [members, setMembers] = useState<PreselectMemberItem[]>([]);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [membersLoading, setMembersLoading] = useState(true);
   const [membersHint, setMembersHint] = useState<string | null>(null);
   const [emptyMessage, setEmptyMessage] = useState<string | null>(null);
-  const [attendedTitle, setAttendedTitle] = useState('上次參加');
+  const [attendedTitle, setAttendedTitle] = useState('上次參加者');
+  const [proxyTitle, setProxyTitle] = useState('歷史代報名單');
   const [waitlistTitle, setWaitlistTitle] = useState('上次候補');
+  const [historyTitle, setHistoryTitle] = useState('其他曾參加者');
+  const [otherTitle, setOtherTitle] = useState('其他群組成員');
 
   const loadMembers = useCallback(
     async (forceRefresh = false) => {
@@ -34,14 +37,18 @@ export function EventCreatePage({ session }: { session: LiffSession }) {
         setMembersHint(result.hint);
         setEmptyMessage(result.emptyMessage);
         setAttendedTitle(result.attendedTitle);
+        setProxyTitle(result.proxyTitle);
         setWaitlistTitle(result.waitlistTitle);
-        setSelectedIds((prev) => {
-          if (!forceRefresh) return result.defaultSelectedIds;
-          const valid = new Set(result.members.map((m) => m.lineUserId));
-          return prev.filter((id) => valid.has(id));
+        setHistoryTitle(result.historyTitle);
+        setOtherTitle(result.otherTitle);
+        setSelectedKeys((prev) => {
+          if (!forceRefresh) return result.defaultSelectedKeys;
+          const valid = new Set(result.members.map((m) => m.key));
+          return prev.filter((key) => valid.has(key));
         });
       } catch {
         setMembersHint('目前顯示最近使用過的會員名單');
+        // Keep existing members and selectedKeys on refresh failure.
         setMembers((prev) => {
           if (prev.length === 0) {
             setEmptyMessage('目前還沒有可選擇的會員');
@@ -115,8 +122,8 @@ export function EventCreatePage({ session }: { session: LiffSession }) {
       </div>
       {copyId ? (
         <p className="hint">
-          已帶入名稱、地址、Google Maps 網址、費用、人數，以及原活動具 LINE
-          身分的正式報名成員。文字代報、候補與已取消者不預選。請重新設定時間後建立。
+          已帶入名稱、地址、Google Maps 網址、費用、人數，以及原活動正式報名（含 LINE
+          會員與文字代報）。候補預設不勾選。請重新設定時間後建立。
         </p>
       ) : null}
       <EventForm
@@ -127,9 +134,12 @@ export function EventCreatePage({ session }: { session: LiffSession }) {
         memberPreselect={{
           members,
           attendedTitle,
+          proxyTitle,
           waitlistTitle,
-          selectedIds,
-          onSelectedIdsChange: setSelectedIds,
+          historyTitle,
+          otherTitle,
+          selectedKeys,
+          onSelectedKeysChange: setSelectedKeys,
           loading: membersLoading,
           hint: membersHint,
           emptyMessage,

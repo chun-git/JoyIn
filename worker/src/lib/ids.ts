@@ -58,11 +58,7 @@ export function toRegistrationRecord(
     (row.type === 'SELF' ? row.line_user_id : null);
   const canCancel =
     viewerLineUserId === organizerLineUserId ||
-    viewerLineUserId === row.created_by_line_user_id ||
-    (Boolean(participantLineUserId) && viewerLineUserId === participantLineUserId) ||
-    (row.type === 'SELF' &&
-      Boolean(row.line_user_id) &&
-      viewerLineUserId === row.line_user_id);
+    (Boolean(participantLineUserId) && viewerLineUserId === participantLineUserId);
 
   return {
     registrationId: row.registration_id,

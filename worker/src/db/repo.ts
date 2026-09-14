@@ -934,6 +934,56 @@ export async function getCachedGroupMembersByIds(
   return results ?? [];
 }
 
+export async function upsertGroupMembersCache(
+  db: D1Database,
+  groupId: string,
+  members: Array<{
+    lineUserId: string;
+    displayName: string;
+    pictureUrl: string | null;
+  }>,
+  syncedAt: string,
+): Promise<void> {
+  if (members.length === 0) return;
+  const statements = members.map((member) =>
+    db
+      .prepare(
+        `INSERT INTO group_members (group_id, line_user_id, display_name, picture_url, synced_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(group_id, line_user_id) DO UPDATE SET
+           display_name = excluded.display_name,
+           picture_url = excluded.picture_url,
+           synced_at = excluded.synced_at`,
+      )
+      .bind(
+        groupId,
+        member.lineUserId,
+        member.displayName,
+        member.pictureUrl,
+        syncedAt,
+      ),
+  );
+  await db.batch(statements);
+}
+
+/** Remove cached members not present in a successful full LINE sync. Never prune to empty wipe. */
+export async function pruneGroupMembersNotIn(
+  db: D1Database,
+  groupId: string,
+  keepLineUserIds: string[],
+): Promise<void> {
+  if (keepLineUserIds.length === 0) return;
+  const placeholders = keepLineUserIds.map(() => '?').join(', ');
+  await db
+    .prepare(
+      `DELETE FROM group_members
+       WHERE group_id = ? AND line_user_id NOT IN (${placeholders})`,
+    )
+    .bind(groupId, ...keepLineUserIds)
+    .run();
+}
+
+/** @deprecated Prefer upsertGroupMembersCache + pruneGroupMembersNotIn */
 export async function replaceGroupMembersCache(
   db: D1Database,
   groupId: string,
@@ -944,26 +994,15 @@ export async function replaceGroupMembersCache(
   }>,
   syncedAt: string,
 ): Promise<void> {
-  const statements: D1PreparedStatement[] = [
-    db.prepare('DELETE FROM group_members WHERE group_id = ?').bind(groupId),
-  ];
-  for (const member of members) {
-    statements.push(
-      db
-        .prepare(
-          `INSERT INTO group_members (group_id, line_user_id, display_name, picture_url, synced_at)
-           VALUES (?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          groupId,
-          member.lineUserId,
-          member.displayName,
-          member.pictureUrl,
-          syncedAt,
-        ),
-    );
+  await upsertGroupMembersCache(db, groupId, members, syncedAt);
+  await pruneGroupMembersNotIn(
+    db,
+    groupId,
+    members.map((m) => m.lineUserId),
+  );
+  if (members.length === 0) {
+    // Keep existing rows when LINE returns an empty member list — never wipe blindly.
   }
-  await db.batch(statements);
 }
 
 export async function getGroupMembersCacheSyncedAt(
@@ -979,12 +1018,62 @@ export async function getGroupMembersCacheSyncedAt(
   return row?.synced_at ?? null;
 }
 
-export interface EventParticipantLineRow {
-  line_user_id: string;
-  participant_name: string;
+export interface RosterParticipantRow {
+  event_id: string;
+  event_created_at: string;
+  type: 'SELF' | 'PROXY';
   status: 'CONFIRMED' | 'WAITLIST';
   waitlist_position: number | null;
   created_at: string;
+  participant_name: string;
+  line_user_id: string | null;
+}
+
+/**
+ * Active registrations for one event (SELF with LINE id, or PROXY with name).
+ * Cancelled rows are deleted, so they never appear.
+ */
+export async function listEventRosterParticipants(
+  db: D1Database,
+  eventId: string,
+): Promise<RosterParticipantRow[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT
+         r.event_id AS event_id,
+         e.created_at AS event_created_at,
+         r.type AS type,
+         r.status AS status,
+         r.waitlist_position AS waitlist_position,
+         r.created_at AS created_at,
+         r.participant_name AS participant_name,
+         CASE
+           WHEN r.type = 'SELF'
+             THEN COALESCE(NULLIF(r.participant_line_user_id, ''), r.line_user_id)
+           ELSE NULL
+         END AS line_user_id
+       FROM registrations r
+       INNER JOIN events e ON e.event_id = r.event_id
+       WHERE r.event_id = ?
+         AND (
+           (
+             r.type = 'SELF'
+             AND TRIM(COALESCE(NULLIF(r.participant_line_user_id, ''), r.line_user_id, '')) != ''
+           )
+           OR (
+             r.type = 'PROXY'
+             AND TRIM(r.participant_name) != ''
+           )
+         )
+       ORDER BY
+         CASE r.status WHEN 'CONFIRMED' THEN 0 ELSE 1 END,
+         CASE r.type WHEN 'SELF' THEN 0 ELSE 1 END,
+         CASE r.status WHEN 'WAITLIST' THEN COALESCE(r.waitlist_position, 999999) ELSE 0 END,
+         r.created_at ASC`,
+    )
+    .bind(eventId)
+    .all<RosterParticipantRow>();
+  return results ?? [];
 }
 
 /** Most recently created non-deleted event in the group (by created_at DESC). */
@@ -1009,34 +1098,84 @@ export async function getLatestGroupEventId(
 }
 
 /**
- * SELF registrations with a LINE user id (excludes PROXY / cancelled).
- * Ordered: confirmed by created_at ASC, then waitlist by position/created_at.
+ * Historical registrations across non-deleted events in the group.
+ * Newer events first; within an event, confirmed then waitlist order.
  */
-export async function listEventLineParticipants(
+export async function listGroupHistoryRosterParticipants(
   db: D1Database,
-  eventId: string,
-): Promise<EventParticipantLineRow[]> {
+  groupId: string,
+  options?: { excludeEventIds?: string[] },
+): Promise<RosterParticipantRow[]> {
+  const exclude = (options?.excludeEventIds ?? []).filter(Boolean);
+  const excludeSql =
+    exclude.length > 0
+      ? `AND e.event_id NOT IN (${exclude.map(() => '?').join(', ')})`
+      : '';
   const { results } = await db
     .prepare(
       `SELECT
-         COALESCE(NULLIF(participant_line_user_id, ''), line_user_id) AS line_user_id,
-         participant_name,
-         status,
-         waitlist_position,
-         created_at
-       FROM registrations
-       WHERE event_id = ?
-         AND type = 'SELF'
-         AND COALESCE(NULLIF(participant_line_user_id, ''), line_user_id) IS NOT NULL
-         AND TRIM(COALESCE(NULLIF(participant_line_user_id, ''), line_user_id)) != ''
+         r.event_id AS event_id,
+         e.created_at AS event_created_at,
+         r.type AS type,
+         r.status AS status,
+         r.waitlist_position AS waitlist_position,
+         r.created_at AS created_at,
+         r.participant_name AS participant_name,
+         CASE
+           WHEN r.type = 'SELF'
+             THEN COALESCE(NULLIF(r.participant_line_user_id, ''), r.line_user_id)
+           ELSE NULL
+         END AS line_user_id
+       FROM registrations r
+       INNER JOIN events e ON e.event_id = r.event_id
+       WHERE e.group_id = ?
+         AND e.status != 'DELETED'
+         ${excludeSql}
+         AND (
+           (
+             r.type = 'SELF'
+             AND TRIM(COALESCE(NULLIF(r.participant_line_user_id, ''), r.line_user_id, '')) != ''
+           )
+           OR (
+             r.type = 'PROXY'
+             AND TRIM(r.participant_name) != ''
+           )
+         )
        ORDER BY
-         CASE status WHEN 'CONFIRMED' THEN 0 ELSE 1 END,
-         CASE status WHEN 'WAITLIST' THEN COALESCE(waitlist_position, 999999) ELSE 0 END,
-         created_at ASC`,
+         e.created_at DESC,
+         CASE r.status WHEN 'CONFIRMED' THEN 0 ELSE 1 END,
+         CASE r.type WHEN 'SELF' THEN 0 ELSE 1 END,
+         CASE r.status WHEN 'WAITLIST' THEN COALESCE(r.waitlist_position, 999999) ELSE 0 END,
+         r.created_at ASC`,
     )
-    .bind(eventId)
-    .all<EventParticipantLineRow>();
+    .bind(groupId, ...exclude)
+    .all<RosterParticipantRow>();
   return results ?? [];
+}
+
+/** @deprecated Prefer listEventRosterParticipants */
+export async function listEventLineParticipants(
+  db: D1Database,
+  eventId: string,
+): Promise<
+  Array<{
+    line_user_id: string;
+    participant_name: string;
+    status: 'CONFIRMED' | 'WAITLIST';
+    waitlist_position: number | null;
+    created_at: string;
+  }>
+> {
+  const rows = await listEventRosterParticipants(db, eventId);
+  return rows
+    .filter((row) => row.type === 'SELF' && row.line_user_id)
+    .map((row) => ({
+      line_user_id: row.line_user_id as string,
+      participant_name: row.participant_name,
+      status: row.status,
+      waitlist_position: row.waitlist_position,
+      created_at: row.created_at,
+    }));
 }
 
 export async function lookupParticipantNamesByLineIds(
@@ -1069,3 +1208,4 @@ export async function lookupParticipantNamesByLineIds(
   }
   return map;
 }
+

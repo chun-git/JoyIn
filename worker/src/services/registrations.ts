@@ -195,12 +195,12 @@ export async function cancelRegistration(
 
   const event = await getVisibleEvent(db, registration.event_id, groupId);
   const isOrganizer = event.organizer_line_user_id === user.lineUserId;
-  const isOwner = registration.created_by_line_user_id === user.lineUserId;
   const participantId =
     registration.participant_line_user_id ??
     (registration.type === 'SELF' ? registration.line_user_id : null);
   const isParticipant = Boolean(participantId) && participantId === user.lineUserId;
-  if (!isOrganizer && !isOwner && !isParticipant) {
+  // created_by is audit-only — only current organizer or the LINE participant may cancel.
+  if (!isOrganizer && !isParticipant) {
     throw Errors.forbidden('不能取消其他人建立的報名');
   }
 

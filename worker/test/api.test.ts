@@ -766,7 +766,7 @@ describe('registrations and waitlist', () => {
     expect(detail.body.event.registrations.confirmed[0].displayLabel).toBe('Amy（Lee 代報）');
   });
 
-  it('lets a user cancel own self and proxy registrations but not others', async () => {
+  it('lets a user cancel own self but only the organizer can cancel proxy', async () => {
     const created = await createEvent('U-org', '主揪', { name: '取消權限', capacity: 5 });
     const eventId = created.body.event.eventId;
     const amy = await json<{ registration: { registrationId: string } }>(`/api/events/${eventId}/join`, {
@@ -788,17 +788,29 @@ describe('registrations and waitlist', () => {
     });
     expect(blocked.status).toBe(403);
 
-    const proxyCancel = await json(`/api/registrations/${leeProxy.body.registration.registrationId}`, {
-      method: 'DELETE',
-      headers: await authHeaders('U-lee', 'Lee'),
-    });
-    expect(proxyCancel.status).toBe(200);
+    const proxyCancelByCreator = await json(
+      `/api/registrations/${leeProxy.body.registration.registrationId}`,
+      {
+        method: 'DELETE',
+        headers: await authHeaders('U-lee', 'Lee'),
+      },
+    );
+    expect(proxyCancelByCreator.status).toBe(403);
 
-    const organizerCancel = await json(`/api/registrations/${amy.body.registration.registrationId}`, {
+    const proxyCancelByOrganizer = await json(
+      `/api/registrations/${leeProxy.body.registration.registrationId}`,
+      {
+        method: 'DELETE',
+        headers: await authHeaders('U-org', '主揪'),
+      },
+    );
+    expect(proxyCancelByOrganizer.status).toBe(200);
+
+    const selfCancel = await json(`/api/registrations/${amy.body.registration.registrationId}`, {
       method: 'DELETE',
-      headers: await authHeaders('U-org', '主揪'),
+      headers: await authHeaders('U-amy', 'Amy'),
     });
-    expect(organizerCancel.status).toBe(200);
+    expect(selfCancel.status).toBe(200);
   });
 
   it('rejects new joins when the event is full without waitlist', async () => {

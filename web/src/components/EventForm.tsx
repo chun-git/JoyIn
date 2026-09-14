@@ -19,9 +19,12 @@ export function EventForm({
   memberPreselect?: {
     members: PreselectMemberItem[];
     attendedTitle?: string;
+    proxyTitle?: string;
     waitlistTitle?: string;
-    selectedIds: string[];
-    onSelectedIdsChange: (ids: string[]) => void;
+    historyTitle?: string;
+    otherTitle?: string;
+    selectedKeys: string[];
+    onSelectedKeysChange: (keys: string[]) => void;
     loading?: boolean;
     hint?: string | null;
     emptyMessage?: string | null;
@@ -94,12 +97,22 @@ export function EventForm({
       return setError('人數上限需為大於 0 的整數');
     }
 
-    const preselectedMemberIds = memberPreselect?.selectedIds ?? [];
-    if (preselectedMemberIds.length > parsedCapacity) {
+    const selectedKeys = memberPreselect?.selectedKeys ?? [];
+    if (selectedKeys.length > parsedCapacity) {
       return setError(
-        `預先報名人數（${preselectedMemberIds.length}）不可超過正式報名上限（${parsedCapacity}）`,
+        `預先報名人數（${selectedKeys.length}）不可超過正式報名上限（${parsedCapacity}）`,
       );
     }
+    const preselectedMemberIds = selectedKeys
+      .filter((key) => key.startsWith('line:'))
+      .map((key) => key.slice('line:'.length));
+    const preselectedProxyNames = selectedKeys
+      .filter((key) => key.startsWith('proxy:'))
+      .map((key) => {
+        const member = memberPreselect?.members.find((m) => m.key === key);
+        return member?.proxyName || member?.displayName || key.slice('proxy:'.length);
+      })
+      .filter(Boolean);
 
     const next: CreateEventInput = {
       name: name.trim(),
@@ -113,6 +126,7 @@ export function EventForm({
       capacity: parsedCapacity,
       waitlistEnabled,
       preselectedMemberIds,
+      preselectedProxyNames,
     };
 
     const timeOrPlaceChanged =
@@ -285,10 +299,13 @@ export function EventForm({
         <MemberPreselectList
           members={memberPreselect.members}
           attendedTitle={memberPreselect.attendedTitle}
+          proxyTitle={memberPreselect.proxyTitle}
           waitlistTitle={memberPreselect.waitlistTitle}
+          historyTitle={memberPreselect.historyTitle}
+          otherTitle={memberPreselect.otherTitle}
           capacity={capacityForUi}
-          selectedIds={memberPreselect.selectedIds}
-          onChange={memberPreselect.onSelectedIdsChange}
+          selectedKeys={memberPreselect.selectedKeys}
+          onChange={memberPreselect.onSelectedKeysChange}
           loading={memberPreselect.loading}
           hint={memberPreselect.hint}
           emptyMessage={memberPreselect.emptyMessage}

@@ -1036,6 +1036,20 @@ section h2 { margin: 0 0 10px; font-size: 18px; }
   overflow-wrap: anywhere;
   font-weight: 700;
 }
+.member-preselect-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.member-preselect-badge {
+  display: inline-block;
+  max-width: 100%;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
 .member-preselect-check {
   flex: 0 0 auto;
 }

@@ -73,7 +73,7 @@ export async function listGroupMemberIds(
   channelAccessToken: string,
   groupId: string,
   fetchImpl: typeof fetch = fetch,
-): Promise<string[]> {
+): Promise<{ ids: string[]; pageCount: number; lastStatus: number }> {
   const token = (channelAccessToken || '').trim();
   const gid = (groupId || '').trim();
   if (!token || !gid) {
@@ -82,6 +82,8 @@ export async function listGroupMemberIds(
 
   const ids: string[] = [];
   let start: string | undefined;
+  let pageCount = 0;
+  let lastStatus = 0;
   for (let page = 0; page < 40; page += 1) {
     const url = new URL(
       `https://api.line.me/v2/bot/group/${encodeURIComponent(gid)}/members/ids`,
@@ -95,14 +97,23 @@ export async function listGroupMemberIds(
         headers: { Authorization: `Bearer ${token}` },
       });
     } catch {
+      console.error('[JoyIn group-members-ids]', {
+        note: 'fetch_failed',
+        groupIdLength: gid.length,
+        pageCount,
+        memberCount: ids.length,
+      });
       throw Errors.groupMembersUnavailable();
     }
 
+    lastStatus = response.status;
+    pageCount += 1;
     if (!response.ok) {
       console.error('[JoyIn group-members-ids]', {
         status: response.status,
         groupIdLength: gid.length,
-        page,
+        pageCount,
+        memberCount: ids.length,
       });
       throw Errors.groupMembersUnavailable();
     }
@@ -126,7 +137,14 @@ export async function listGroupMemberIds(
     break;
   }
 
-  return [...new Set(ids)];
+  const unique = [...new Set(ids)];
+  console.info('[JoyIn group-members-ids]', {
+    status: lastStatus,
+    groupIdLength: gid.length,
+    pageCount,
+    memberCount: unique.length,
+  });
+  return { ids: unique, pageCount, lastStatus };
 }
 
 /**

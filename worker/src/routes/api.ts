@@ -59,6 +59,18 @@ function requirePreselectedMemberIds(value: unknown): string[] {
   return [...new Set(ids)];
 }
 
+function requirePreselectedProxyNames(value: unknown): string[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) {
+    throw Errors.validation('預選代報格式無效');
+  }
+  const names = value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim().replace(/\s+/g, ' '))
+    .filter((item) => item.length > 0 && item.length <= 40);
+  return names;
+}
+
 api.get('/health', (c) => c.json({ ok: true, service: 'joyin' }));
 
 api.get('/config', (c) =>
@@ -162,6 +174,7 @@ api.post('/events', async (c) => {
       endDate: range.endDate,
       endTime: range.endTime,
       preselectedMemberIds: requirePreselectedMemberIds(body.preselectedMemberIds),
+      preselectedProxyNames: requirePreselectedProxyNames(body.preselectedProxyNames),
     },
     { channelAccessToken: c.env.LINE_CHANNEL_ACCESS_TOKEN },
   );
@@ -251,6 +264,7 @@ api.post('/events/:eventId/copy', async (c) => {
     input.waitlistEnabled = requireBoolean(body.waitlistEnabled, '是否開放候補');
   }
   input.preselectedMemberIds = requirePreselectedMemberIds(body.preselectedMemberIds);
+  input.preselectedProxyNames = requirePreselectedProxyNames(body.preselectedProxyNames);
   const event = await copyEvent(c.env.DB, c.req.param('eventId'), userOf(c), groupId, input, {
     channelAccessToken: c.env.LINE_CHANNEL_ACCESS_TOKEN,
   });

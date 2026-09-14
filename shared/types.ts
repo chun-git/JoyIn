@@ -54,22 +54,44 @@ export interface GroupMemberPublic {
   pictureUrl: string | null;
 }
 
-export type PreselectMemberSection = 'attended' | 'waitlist' | 'other';
+export type PreselectCandidateKind = 'line' | 'proxy';
+export type PreselectMemberSection =
+  | 'attended'
+  | 'proxy'
+  | 'waitlist'
+  | 'history'
+  | 'other';
+export type PreselectMemberBadge = 'proxy' | 'waitlist' | null;
 
-export interface PreselectMemberItem extends GroupMemberPublic {
+export interface PreselectMemberItem {
+  /** Stable selection key: `line:{userId}` or `proxy:{normalizedName}`. */
+  key: string;
+  kind: PreselectCandidateKind;
+  lineUserId: string | null;
+  proxyName: string | null;
+  displayName: string;
+  pictureUrl: string | null;
   section: PreselectMemberSection;
   defaultSelected: boolean;
+  badge: PreselectMemberBadge;
 }
 
 export interface PreselectMemberRoster {
   members: PreselectMemberItem[];
   sections: {
     attended: PreselectMemberItem[];
+    proxy: PreselectMemberItem[];
     waitlist: PreselectMemberItem[];
+    history: PreselectMemberItem[];
     other: PreselectMemberItem[];
   };
   attendedTitle: string;
+  proxyTitle: string;
   waitlistTitle: string;
+  historyTitle: string;
+  otherTitle: string;
+  defaultSelectedKeys: string[];
+  /** @deprecated Prefer defaultSelectedKeys */
   defaultSelectedIds: string[];
   lineSyncStatus: 'ok' | 'failed' | 'skipped' | 'unavailable';
   hint: string | null;
@@ -105,9 +127,11 @@ export interface CreateEventInput extends EventTimeRangeInput {
   waitlistEnabled: boolean;
   /** LINE user ids to pre-register as CONFIRMED (organizer preselect). */
   preselectedMemberIds?: string[];
+  /** Proxy display names to pre-register as PROXY (organizer preselect). */
+  preselectedProxyNames?: string[];
 }
 
-export interface UpdateEventInput extends Partial<Omit<CreateEventInput, 'preselectedMemberIds'>> {
+export interface UpdateEventInput extends Partial<Omit<CreateEventInput, 'preselectedMemberIds' | 'preselectedProxyNames'>> {
   confirmTimeLocationChange?: boolean;
 }
 
@@ -119,6 +143,7 @@ export interface CopyEventInput extends EventTimeRangeInput {
   capacity?: number;
   waitlistEnabled?: boolean;
   preselectedMemberIds?: string[];
+  preselectedProxyNames?: string[];
 }
 
 export interface TransferInviteCreated {

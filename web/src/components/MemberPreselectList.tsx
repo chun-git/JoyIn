@@ -1,13 +1,21 @@
 import { useMemo, useState } from 'react';
 import type { PreselectMemberItem } from '../../../shared/types';
 
+function badgeLabel(member: PreselectMemberItem, waitlistTitle: string): string | null {
+  if (member.badge === 'waitlist') return waitlistTitle;
+  if (member.badge === 'proxy' || member.kind === 'proxy') return '代報';
+  return null;
+}
+
 export function MemberPreselectList({
   members,
-  attendedTitle = '上次參加',
+  attendedTitle = '上次參加者',
+  proxyTitle = '歷史代報名單',
   waitlistTitle = '上次候補',
+  historyTitle = '其他曾參加者',
   otherTitle = '其他群組成員',
   capacity,
-  selectedIds,
+  selectedKeys,
   onChange,
   loading,
   hint,
@@ -16,18 +24,20 @@ export function MemberPreselectList({
 }: {
   members: PreselectMemberItem[];
   attendedTitle?: string;
+  proxyTitle?: string;
   waitlistTitle?: string;
+  historyTitle?: string;
   otherTitle?: string;
   capacity: number;
-  selectedIds: string[];
-  onChange: (ids: string[]) => void;
+  selectedKeys: string[];
+  onChange: (keys: string[]) => void;
   loading?: boolean;
   hint?: string | null;
   emptyMessage?: string | null;
   onRefresh?: () => void;
 }) {
   const [query, setQuery] = useState('');
-  const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const selected = useMemo(() => new Set(selectedKeys), [selectedKeys]);
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return members;
@@ -35,20 +45,19 @@ export function MemberPreselectList({
   }, [members, query]);
 
   const sections = useMemo(() => {
-    const attended = filtered.filter((m) => m.section === 'attended');
-    const waitlist = filtered.filter((m) => m.section === 'waitlist');
-    const other = filtered.filter((m) => m.section === 'other');
     return [
-      { key: 'attended' as const, title: attendedTitle, items: attended },
-      { key: 'waitlist' as const, title: waitlistTitle, items: waitlist },
-      { key: 'other' as const, title: otherTitle, items: other },
+      { key: 'attended' as const, title: attendedTitle, items: filtered.filter((m) => m.section === 'attended') },
+      { key: 'proxy' as const, title: proxyTitle, items: filtered.filter((m) => m.section === 'proxy') },
+      { key: 'waitlist' as const, title: waitlistTitle, items: filtered.filter((m) => m.section === 'waitlist') },
+      { key: 'history' as const, title: historyTitle, items: filtered.filter((m) => m.section === 'history') },
+      { key: 'other' as const, title: otherTitle, items: filtered.filter((m) => m.section === 'other') },
     ].filter((section) => section.items.length > 0);
-  }, [attendedTitle, filtered, otherTitle, waitlistTitle]);
+  }, [attendedTitle, filtered, historyTitle, otherTitle, proxyTitle, waitlistTitle]);
 
-  function toggle(userId: string) {
+  function toggle(key: string) {
     const next = new Set(selected);
-    if (next.has(userId)) next.delete(userId);
-    else next.add(userId);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
     onChange([...next]);
   }
 
@@ -57,7 +66,7 @@ export function MemberPreselectList({
       <div className="member-preselect-header">
         <h3>預先報名成員</h3>
         <p className="hint member-preselect-count">
-          已選擇 {selectedIds.length} 人／人數上限 {capacity} 人
+          已選擇 {selectedKeys.length} 人／人數上限 {capacity} 人
         </p>
       </div>
       {hint ? (
@@ -99,13 +108,14 @@ export function MemberPreselectList({
                   <h4 className="member-preselect-section-title">{section.title}</h4>
                   <ul className="member-preselect-list">
                     {section.items.map((member) => {
-                      const checked = selected.has(member.lineUserId);
+                      const checked = selected.has(member.key);
+                      const badge = badgeLabel(member, waitlistTitle);
                       return (
-                        <li key={member.lineUserId}>
+                        <li key={member.key}>
                           <button
                             type="button"
                             className={`member-preselect-row${checked ? ' is-selected' : ''}`}
-                            onClick={() => toggle(member.lineUserId)}
+                            onClick={() => toggle(member.key)}
                             aria-pressed={checked}
                           >
                             <span className="member-preselect-avatar" aria-hidden="true">
@@ -117,7 +127,12 @@ export function MemberPreselectList({
                                 </span>
                               )}
                             </span>
-                            <span className="member-preselect-name">{member.displayName}</span>
+                            <span className="member-preselect-meta">
+                              <span className="member-preselect-name">{member.displayName}</span>
+                              {badge ? (
+                                <span className="member-preselect-badge">{badge}</span>
+                              ) : null}
+                            </span>
                             <span className="member-preselect-check" aria-hidden="true">
                               <input type="checkbox" checked={checked} readOnly tabIndex={-1} />
                             </span>
