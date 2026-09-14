@@ -1,8 +1,15 @@
 import type { AuthUser } from '../env';
+import { Errors } from './errors';
 
 export type GroupMemberCheckResult =
   | { ok: true }
   | { ok: false; reason: 'not_member' | 'bot_not_in_group' | 'line_api_error' };
+
+export interface LineGroupMemberProfile {
+  userId: string;
+  displayName: string;
+  pictureUrl: string | null;
+}
 
 /**
  * Verify the LINE user is still a member of the Messaging API group.
@@ -35,7 +42,6 @@ export async function checkGroupMember(
       return { ok: true };
     }
     if (response.status === 404) {
-      // LINE returns 404 when the user is not in the group, or the group/bot relation is gone.
       return { ok: false, reason: 'not_member' };
     }
     if (response.status === 403) {
@@ -59,5 +65,107 @@ export async function checkGroupMember(
   }
 }
 
-/** Test helper surface — keep AuthUser typed for callers. */
+/**
+ * List all member user ids in a group (handles continuationToken pagination).
+ * GET /v2/bot/group/{groupId}/members/ids
+ */
+export async function listGroupMemberIds(
+  channelAccessToken: string,
+  groupId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string[]> {
+  const token = (channelAccessToken || '').trim();
+  const gid = (groupId || '').trim();
+  if (!token || !gid) {
+    throw Errors.groupMembersUnavailable();
+  }
+
+  const ids: string[] = [];
+  let start: string | undefined;
+  for (let page = 0; page < 40; page += 1) {
+    const url = new URL(
+      `https://api.line.me/v2/bot/group/${encodeURIComponent(gid)}/members/ids`,
+    );
+    if (start) url.searchParams.set('start', start);
+
+    let response: Response;
+    try {
+      response = await fetchImpl(url.toString(), {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch {
+      throw Errors.groupMembersUnavailable();
+    }
+
+    if (!response.ok) {
+      console.error('[JoyIn group-members-ids]', {
+        status: response.status,
+        groupIdLength: gid.length,
+        page,
+      });
+      throw Errors.groupMembersUnavailable();
+    }
+
+    let body: { memberIds?: unknown; next?: unknown };
+    try {
+      body = (await response.json()) as { memberIds?: unknown; next?: unknown };
+    } catch {
+      throw Errors.groupMembersUnavailable();
+    }
+
+    const pageIds = Array.isArray(body.memberIds)
+      ? body.memberIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+      : [];
+    ids.push(...pageIds);
+
+    if (typeof body.next === 'string' && body.next.trim()) {
+      start = body.next.trim();
+      continue;
+    }
+    break;
+  }
+
+  return [...new Set(ids)];
+}
+
+/**
+ * GET /v2/bot/group/{groupId}/member/{userId}
+ */
+export async function fetchGroupMemberProfile(
+  channelAccessToken: string,
+  groupId: string,
+  lineUserId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<LineGroupMemberProfile | null> {
+  const token = (channelAccessToken || '').trim();
+  const gid = (groupId || '').trim();
+  const uid = (lineUserId || '').trim();
+  if (!token || !gid || !uid) return null;
+
+  try {
+    const response = await fetchImpl(
+      `https://api.line.me/v2/bot/group/${encodeURIComponent(gid)}/member/${encodeURIComponent(uid)}`,
+      {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+    if (!response.ok) return null;
+    const body = (await response.json()) as {
+      userId?: unknown;
+      displayName?: unknown;
+      pictureUrl?: unknown;
+    };
+    if (typeof body.userId !== 'string' || typeof body.displayName !== 'string') return null;
+    return {
+      userId: body.userId,
+      displayName: body.displayName,
+      pictureUrl: typeof body.pictureUrl === 'string' ? body.pictureUrl : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export type { AuthUser };

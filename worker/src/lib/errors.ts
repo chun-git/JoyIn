@@ -36,4 +36,6 @@ export const Errors = {
     new AppError(403, 'link_unrecoverable', message),
   rateLimited: (message = '操作過於頻繁，請稍後再試') =>
     new AppError(429, 'rate_limited', message),
+  groupMembersUnavailable: (message = '暫時無法取得群組成員') =>
+    new AppError(502, 'group_members_unavailable', message),
 };

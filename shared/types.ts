@@ -1,6 +1,7 @@
 export type EventStatus = 'OPEN' | 'CLOSED' | 'DELETED';
 export type RegistrationType = 'SELF' | 'PROXY';
 export type RegistrationStatus = 'CONFIRMED' | 'WAITLIST';
+export type RegistrationSource = 'SELF_JOIN' | 'PROXY' | 'ORGANIZER_PRESELECT';
 export type TransferInviteStatus = 'PENDING' | 'ACCEPTED' | 'CANCELLED';
 
 export interface EventSummary {
@@ -34,14 +35,23 @@ export interface RegistrationRecord {
   eventId: string;
   type: RegistrationType;
   status: RegistrationStatus;
+  registrationSource: RegistrationSource;
   waitlistPosition: number | null;
   participantName: string;
   displayLabel: string;
   lineUserId: string | null;
+  /** LINE user id of the attendee when known (SELF / ORGANIZER_PRESELECT). */
+  participantLineUserId: string | null;
   createdByLineUserId: string;
   createdByDisplayName: string;
   createdAt: string;
   canCancel: boolean;
+}
+
+export interface GroupMemberPublic {
+  lineUserId: string;
+  displayName: string;
+  pictureUrl: string | null;
 }
 
 export interface EventDetail extends EventSummary {
@@ -70,9 +80,11 @@ export interface CreateEventInput extends EventTimeRangeInput {
   feeAmount: number;
   capacity: number;
   waitlistEnabled: boolean;
+  /** LINE user ids to pre-register as CONFIRMED (organizer preselect). */
+  preselectedMemberIds?: string[];
 }
 
-export interface UpdateEventInput extends Partial<CreateEventInput> {
+export interface UpdateEventInput extends Partial<Omit<CreateEventInput, 'preselectedMemberIds'>> {
   confirmTimeLocationChange?: boolean;
 }
 
@@ -83,6 +95,7 @@ export interface CopyEventInput extends EventTimeRangeInput {
   feeAmount?: number;
   capacity?: number;
   waitlistEnabled?: boolean;
+  preselectedMemberIds?: string[];
 }
 
 export interface TransferInviteCreated {

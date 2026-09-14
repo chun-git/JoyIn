@@ -33,6 +33,7 @@ import {
   previewTransferInvite,
 } from '../services/transfer';
 import { cancelRegistration, joinProxy, joinSelf } from '../services/registrations';
+import { listGroupMembersForClient } from '../services/group-members';
 import {
   recoverContextFromEventId,
   refreshExpiredContext,
@@ -43,8 +44,20 @@ export const api = new Hono<AppEnv>();
 
 api.onError((err, c) => {
   const { status, body } = handleRouteError(err);
-  return c.json(body, status as 400 | 401 | 403 | 404 | 409 | 410 | 429 | 500);
+  return c.json(body, status as 400 | 401 | 403 | 404 | 409 | 410 | 429 | 500 | 502);
 });
+
+function requirePreselectedMemberIds(value: unknown): string[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) {
+    throw Errors.validation('預選成員格式無效');
+  }
+  const ids = value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return [...new Set(ids)];
+}
 
 api.get('/health', (c) => c.json({ ok: true, service: 'joyin' }));
 
@@ -72,6 +85,7 @@ api.use('/events', liffAuth);
 api.use('/registrations/*', liffAuth);
 api.use('/transfer-invites/*', liffAuth);
 api.use('/context/*', liffAuth);
+api.use('/group/*', liffAuth);
 
 /**
  * Refresh an expired group context when HMAC is still valid and the user is a group member.
@@ -114,22 +128,45 @@ api.get('/events', async (c) => {
   return c.json({ events });
 });
 
+/** Group members for organizer preselect — never returns groupId or tokens. */
+api.get('/group/members', async (c) => {
+  const groupId = requireGroupId(c);
+  const forceRefresh = c.req.query('refresh') === '1';
+  const result = await listGroupMembersForClient(
+    c.env.DB,
+    groupId,
+    c.env.LINE_CHANNEL_ACCESS_TOKEN,
+    { forceRefresh },
+  );
+  return c.json({
+    members: result.members,
+    syncedAt: result.syncedAt,
+  });
+});
+
 api.post('/events', async (c) => {
   const groupId = requireGroupId(c);
   const body = parseJson<Record<string, unknown>>(await c.req.json());
   const range = requireTimeRange(body);
-  const event = await createEvent(c.env.DB, groupId, userOf(c), {
-    name: requireString(body.name, '活動名稱', 1, 50),
-    address: requireString(body.address, '活動地址', 1, 120),
-    googleMapsUrl: requireGoogleMapsUrl(body.googleMapsUrl),
-    feeAmount: requireFeeAmount(body.feeAmount ?? 0),
-    capacity: requireCapacity(body.capacity),
-    waitlistEnabled: requireBoolean(body.waitlistEnabled, '是否開放候補'),
-    startDate: range.startDate,
-    startTime: range.startTime,
-    endDate: range.endDate,
-    endTime: range.endTime,
-  });
+  const event = await createEvent(
+    c.env.DB,
+    groupId,
+    userOf(c),
+    {
+      name: requireString(body.name, '活動名稱', 1, 50),
+      address: requireString(body.address, '活動地址', 1, 120),
+      googleMapsUrl: requireGoogleMapsUrl(body.googleMapsUrl),
+      feeAmount: requireFeeAmount(body.feeAmount ?? 0),
+      capacity: requireCapacity(body.capacity),
+      waitlistEnabled: requireBoolean(body.waitlistEnabled, '是否開放候補'),
+      startDate: range.startDate,
+      startTime: range.startTime,
+      endDate: range.endDate,
+      endTime: range.endTime,
+      preselectedMemberIds: requirePreselectedMemberIds(body.preselectedMemberIds),
+    },
+    { channelAccessToken: c.env.LINE_CHANNEL_ACCESS_TOKEN },
+  );
   return c.json({ event }, 201);
 });
 
@@ -215,7 +252,10 @@ api.post('/events/:eventId/copy', async (c) => {
   if (body.waitlistEnabled !== undefined) {
     input.waitlistEnabled = requireBoolean(body.waitlistEnabled, '是否開放候補');
   }
-  const event = await copyEvent(c.env.DB, c.req.param('eventId'), userOf(c), groupId, input);
+  input.preselectedMemberIds = requirePreselectedMemberIds(body.preselectedMemberIds);
+  const event = await copyEvent(c.env.DB, c.req.param('eventId'), userOf(c), groupId, input, {
+    channelAccessToken: c.env.LINE_CHANNEL_ACCESS_TOKEN,
+  });
   return c.json({ event }, 201);
 });
 

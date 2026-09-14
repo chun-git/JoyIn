@@ -1,4 +1,9 @@
-import type { RegistrationRecord, RegistrationStatus, RegistrationType } from '../../../shared/types';
+import type {
+  RegistrationRecord,
+  RegistrationSource,
+  RegistrationStatus,
+  RegistrationType,
+} from '../../../shared/types';
 
 export function newId(): string {
   return crypto.randomUUID();
@@ -19,6 +24,17 @@ export function displayLabel(
   return participantName;
 }
 
+function resolveRegistrationSource(
+  row: {
+    type: RegistrationType;
+    registration_source?: string | null;
+  },
+): RegistrationSource {
+  if (row.registration_source === 'ORGANIZER_PRESELECT') return 'ORGANIZER_PRESELECT';
+  if (row.registration_source === 'PROXY' || row.type === 'PROXY') return 'PROXY';
+  return 'SELF_JOIN';
+}
+
 export function toRegistrationRecord(
   row: {
     registration_id: string;
@@ -28,6 +44,8 @@ export function toRegistrationRecord(
     waitlist_position: number | null;
     participant_name: string;
     line_user_id: string | null;
+    participant_line_user_id?: string | null;
+    registration_source?: string | null;
     created_by_line_user_id: string;
     created_by_display_name: string;
     created_at: string;
@@ -35,19 +53,28 @@ export function toRegistrationRecord(
   viewerLineUserId: string,
   organizerLineUserId: string,
 ): RegistrationRecord {
+  const participantLineUserId =
+    row.participant_line_user_id ??
+    (row.type === 'SELF' ? row.line_user_id : null);
   const canCancel =
     viewerLineUserId === organizerLineUserId ||
-    viewerLineUserId === row.created_by_line_user_id;
+    viewerLineUserId === row.created_by_line_user_id ||
+    (Boolean(participantLineUserId) && viewerLineUserId === participantLineUserId) ||
+    (row.type === 'SELF' &&
+      Boolean(row.line_user_id) &&
+      viewerLineUserId === row.line_user_id);
 
   return {
     registrationId: row.registration_id,
     eventId: row.event_id,
     type: row.type,
     status: row.status,
+    registrationSource: resolveRegistrationSource(row),
     waitlistPosition: row.waitlist_position,
     participantName: row.participant_name,
     displayLabel: displayLabel(row.type, row.participant_name, row.created_by_display_name),
     lineUserId: row.line_user_id,
+    participantLineUserId,
     createdByLineUserId: row.created_by_line_user_id,
     createdByDisplayName: row.created_by_display_name,
     createdAt: row.created_at,

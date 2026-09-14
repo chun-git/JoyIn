@@ -1,19 +1,29 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import type { CreateEventInput } from '../../../shared/types';
+import type { CreateEventInput, GroupMemberPublic } from '../../../shared/types';
 import { addOneMinute, taipeiParts, validateEventSchedule } from '@shared/datetime';
 import { parseFeeAmount, parseGoogleMapsUrl } from '@shared/event-fields';
+import { MemberPreselectList } from './MemberPreselectList';
 
 export function EventForm({
   initial,
   submitLabel,
   onSubmit,
   timeHint,
+  memberPreselect,
 }: {
   initial?: Partial<CreateEventInput>;
   submitLabel: string;
   onSubmit: (input: CreateEventInput, confirmTimeLocationChange: boolean) => Promise<void>;
   timeHint?: string;
+  memberPreselect?: {
+    members: GroupMemberPublic[];
+    selectedIds: string[];
+    onSelectedIdsChange: (ids: string[]) => void;
+    loading?: boolean;
+    error?: string;
+    onRetry?: () => void;
+  };
 }) {
   const [name, setName] = useState(initial?.name ?? '');
   const [startDate, setStartDate] = useState(initial?.startDate ?? '');
@@ -81,6 +91,16 @@ export function EventForm({
       return setError('人數上限需為大於 0 的整數');
     }
 
+    const preselectedMemberIds = memberPreselect?.selectedIds ?? [];
+    if (preselectedMemberIds.length > parsedCapacity) {
+      return setError(
+        `預先報名人數（${preselectedMemberIds.length}）不可超過正式報名上限（${parsedCapacity}）`,
+      );
+    }
+    if (memberPreselect?.error) {
+      return setError(memberPreselect.error);
+    }
+
     const next: CreateEventInput = {
       name: name.trim(),
       startDate,
@@ -92,6 +112,7 @@ export function EventForm({
       feeAmount: feeParsed.value,
       capacity: parsedCapacity,
       waitlistEnabled,
+      preselectedMemberIds,
     };
 
     const timeOrPlaceChanged =
@@ -130,6 +151,9 @@ export function EventForm({
     startDate && endDate && startDate === endDate ? addOneMinute(startTime) : null;
   const endTimeMin =
     endTimeCandidate && endTime >= endTimeCandidate ? endTimeCandidate : undefined;
+  const parsedCapacityForUi = Number(capacity);
+  const capacityForUi =
+    Number.isInteger(parsedCapacityForUi) && parsedCapacityForUi > 0 ? parsedCapacityForUi : 0;
 
   return (
     <form className="panel event-form" aria-label="活動表單" onSubmit={handleSubmit}>
@@ -257,6 +281,17 @@ export function EventForm({
         />
         開放候補
       </label>
+      {memberPreselect ? (
+        <MemberPreselectList
+          members={memberPreselect.members}
+          capacity={capacityForUi}
+          selectedIds={memberPreselect.selectedIds}
+          onChange={memberPreselect.onSelectedIdsChange}
+          loading={memberPreselect.loading}
+          error={memberPreselect.error}
+          onRetry={memberPreselect.onRetry}
+        />
+      ) : null}
       {error ? <p className="error">{error}</p> : null}
       <div className="row form-actions">
         <button className="btn" type="submit" disabled={pending}>

@@ -107,6 +107,8 @@ export async function joinSelf(
       lineUserId: user.lineUserId,
       createdByLineUserId: user.lineUserId,
       createdByDisplayName: user.displayName,
+      registrationSource: 'SELF_JOIN',
+      participantLineUserId: user.lineUserId,
       createdAt,
     });
   } catch (error) {
@@ -161,6 +163,8 @@ export async function joinProxy(
       lineUserId: null,
       createdByLineUserId: user.lineUserId,
       createdByDisplayName: user.displayName,
+      registrationSource: 'PROXY',
+      participantLineUserId: null,
       createdAt,
     });
   } catch (error) {
@@ -192,7 +196,11 @@ export async function cancelRegistration(
   const event = await getVisibleEvent(db, registration.event_id, groupId);
   const isOrganizer = event.organizer_line_user_id === user.lineUserId;
   const isOwner = registration.created_by_line_user_id === user.lineUserId;
-  if (!isOrganizer && !isOwner) {
+  const participantId =
+    registration.participant_line_user_id ??
+    (registration.type === 'SELF' ? registration.line_user_id : null);
+  const isParticipant = Boolean(participantId) && participantId === user.lineUserId;
+  if (!isOrganizer && !isOwner && !isParticipant) {
     throw Errors.forbidden('不能取消其他人建立的報名');
   }
 

@@ -15,6 +15,16 @@ vi.mock('./api', () => ({
     getEvent: (...args: unknown[]) => getEvent(...args),
     copyEvent: (...args: unknown[]) => copyEvent(...args),
     createEvent: (...args: unknown[]) => createEvent(...args),
+    listGroupMembers: vi.fn(async () => ({ members: [], syncedAt: null })),
+  },
+  ApiError: class ApiError extends Error {
+    constructor(
+      public status: number,
+      public code: string,
+      message: string,
+    ) {
+      super(message);
+    }
   },
 }));
 

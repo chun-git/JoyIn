@@ -10,14 +10,17 @@ import { isExpired, nowIso, validateEventSchedule } from '../lib/datetime';
 import { newId, toRegistrationRecord } from '../lib/ids';
 import {
   getEventRow,
-  insertEvent,
   listRegistrations,
   listUpcomingEvents,
+  prepareInsertEventStatement,
+  prepareInsertRegistrationStatement,
   setEventStatus,
   toEventSummary,
   updateEventRow,
+  type GroupMemberRow,
 } from '../db/repo';
 import type { AuthUser } from '../env';
+import { resolvePreselectedMembers } from './group-members';
 
 function endAtOf(row: { end_at: string | null; event_at: string }): string {
   return row.end_at || row.event_at;
@@ -83,8 +86,12 @@ export async function getEventDetail(
     viewer: {
       isOrganizer: user.lineUserId === row.organizer_line_user_id,
       selfRegistration:
-        records.find((item) => item.type === 'SELF' && item.createdByLineUserId === user.lineUserId) ??
-        null,
+        records.find(
+          (item) =>
+            item.type === 'SELF' &&
+            (item.participantLineUserId === user.lineUserId ||
+              item.lineUserId === user.lineUserId),
+        ) ?? null,
       proxyRegistrations: records.filter(
         (item) => item.type === 'PROXY' && item.createdByLineUserId === user.lineUserId,
       ),
@@ -115,11 +122,49 @@ export async function createEvent(
   groupId: string,
   user: AuthUser,
   input: CreateEventInput,
+  options?: {
+    channelAccessToken?: string;
+    fetchImpl?: typeof fetch;
+    /** Pre-resolved members (tests / when cache already validated). */
+    preselectedMembers?: GroupMemberRow[];
+  },
 ): Promise<EventSummary> {
   const { startAt, endAt } = resolveRange(input, { requireStartInFuture: true });
   const createdAt = nowIso();
   const eventId = newId();
-  await insertEvent(db, {
+
+  const rawIds = input.preselectedMemberIds ?? [];
+  const uniqueIds = [...new Set(rawIds.map((id) => id.trim()).filter(Boolean))];
+  if (uniqueIds.length > input.capacity) {
+    throw Errors.validation(
+      `預先報名人數（${uniqueIds.length}）不可超過正式報名上限（${input.capacity}）`,
+    );
+  }
+
+  let preselected = options?.preselectedMembers ?? [];
+  if (uniqueIds.length > 0 && preselected.length === 0) {
+    const token = options?.channelAccessToken || '';
+    if (!token) {
+      throw Errors.groupMembersUnavailable();
+    }
+    preselected = await resolvePreselectedMembers(
+      db,
+      groupId,
+      uniqueIds,
+      token,
+      options?.fetchImpl ?? fetch,
+    );
+  }
+  if (uniqueIds.length > 0 && preselected.length !== uniqueIds.length) {
+    throw Errors.validation('部分預選成員不在目前群組名單中，請重新整理後再試');
+  }
+  if (preselected.length > input.capacity) {
+    throw Errors.validation(
+      `預先報名人數（${preselected.length}）不可超過正式報名上限（${input.capacity}）`,
+    );
+  }
+
+  const eventValues = {
     eventId,
     groupId,
     name: input.name,
@@ -137,7 +182,37 @@ export async function createEvent(
     organizerLineUserId: user.lineUserId,
     organizerDisplayName: user.displayName,
     createdAt,
-  });
+  };
+
+  const statements = [prepareInsertEventStatement(db, eventValues)];
+  for (const member of preselected) {
+    statements.push(
+      prepareInsertRegistrationStatement(db, {
+        registrationId: newId(),
+        eventId,
+        type: 'SELF',
+        status: 'CONFIRMED',
+        waitlistPosition: null,
+        participantName: member.display_name,
+        lineUserId: member.line_user_id,
+        createdByLineUserId: user.lineUserId,
+        createdByDisplayName: user.displayName,
+        createdAt,
+        registrationSource: 'ORGANIZER_PRESELECT',
+        participantLineUserId: member.line_user_id,
+      }),
+    );
+  }
+
+  try {
+    await db.batch(statements);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('UNIQUE') || message.includes('unique')) {
+      throw Errors.conflict('預選成員中有人已報名，請調整後再試');
+    }
+    throw error;
+  }
 
   const row = await getEventRow(db, eventId);
   if (!row) {
@@ -261,28 +336,39 @@ export async function copyEvent(
   user: AuthUser,
   groupId: string,
   input: CopyEventInput,
+  options?: {
+    channelAccessToken?: string;
+    fetchImpl?: typeof fetch;
+  },
 ): Promise<EventSummary> {
   const source = await getVisibleEvent(db, eventId, groupId);
-  return createEvent(db, source.group_id, user, {
-    name: input.name ?? source.name,
-    address: input.address ?? source.address,
-    googleMapsUrl:
-      input.googleMapsUrl !== undefined
-        ? input.googleMapsUrl
-        : typeof source.google_maps_url === 'string' && source.google_maps_url.trim()
-          ? source.google_maps_url.trim()
-          : null,
-    feeAmount:
-      input.feeAmount !== undefined
-        ? input.feeAmount
-        : Number.isFinite(Number(source.fee_amount))
-          ? Math.trunc(Number(source.fee_amount))
-          : 0,
-    capacity: input.capacity ?? source.capacity,
-    waitlistEnabled: input.waitlistEnabled ?? Boolean(source.waitlist_enabled),
-    startDate: input.startDate,
-    startTime: input.startTime,
-    endDate: input.endDate,
-    endTime: input.endTime,
-  });
+  return createEvent(
+    db,
+    source.group_id,
+    user,
+    {
+      name: input.name ?? source.name,
+      address: input.address ?? source.address,
+      googleMapsUrl:
+        input.googleMapsUrl !== undefined
+          ? input.googleMapsUrl
+          : typeof source.google_maps_url === 'string' && source.google_maps_url.trim()
+            ? source.google_maps_url.trim()
+            : null,
+      feeAmount:
+        input.feeAmount !== undefined
+          ? input.feeAmount
+          : Number.isFinite(Number(source.fee_amount))
+            ? Math.trunc(Number(source.fee_amount))
+            : 0,
+      capacity: input.capacity ?? source.capacity,
+      waitlistEnabled: input.waitlistEnabled ?? Boolean(source.waitlist_enabled),
+      startDate: input.startDate,
+      startTime: input.startTime,
+      endDate: input.endDate,
+      endTime: input.endTime,
+      preselectedMemberIds: input.preselectedMemberIds ?? [],
+    },
+    options,
+  );
 }

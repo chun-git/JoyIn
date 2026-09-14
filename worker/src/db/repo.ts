@@ -33,10 +33,20 @@ export interface RegistrationRow {
   waitlist_position: number | null;
   participant_name: string;
   line_user_id: string | null;
+  participant_line_user_id?: string | null;
+  registration_source?: string | null;
   created_by_line_user_id: string;
   created_by_display_name: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface GroupMemberRow {
+  group_id: string;
+  line_user_id: string;
+  display_name: string;
+  picture_url: string | null;
+  synced_at: string;
 }
 
 function taipeiParts(iso: string): { date: string; time: string } {
@@ -491,15 +501,27 @@ export async function insertRegistration(
     createdByLineUserId: string;
     createdByDisplayName: string;
     createdAt: string;
+    registrationSource?: 'SELF_JOIN' | 'PROXY' | 'ORGANIZER_PRESELECT';
+    participantLineUserId?: string | null;
   },
 ): Promise<void> {
+  const source =
+    values.registrationSource ??
+    (values.type === 'PROXY' ? 'PROXY' : 'SELF_JOIN');
+  const participantLineUserId =
+    values.participantLineUserId !== undefined
+      ? values.participantLineUserId
+      : values.type === 'SELF'
+        ? values.lineUserId
+        : null;
   await db
     .prepare(
       `INSERT INTO registrations (
         registration_id, event_id, type, status, waitlist_position,
         participant_name, line_user_id, created_by_line_user_id,
-        created_by_display_name, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        created_by_display_name, created_at, updated_at,
+        registration_source, participant_line_user_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       values.registrationId,
@@ -513,8 +535,104 @@ export async function insertRegistration(
       values.createdByDisplayName,
       values.createdAt,
       values.createdAt,
+      source,
+      participantLineUserId,
     )
     .run();
+}
+
+export function prepareInsertRegistrationStatement(
+  db: D1Database,
+  values: {
+    registrationId: string;
+    eventId: string;
+    type: 'SELF' | 'PROXY';
+    status: 'CONFIRMED' | 'WAITLIST';
+    waitlistPosition: number | null;
+    participantName: string;
+    lineUserId: string | null;
+    createdByLineUserId: string;
+    createdByDisplayName: string;
+    createdAt: string;
+    registrationSource: 'SELF_JOIN' | 'PROXY' | 'ORGANIZER_PRESELECT';
+    participantLineUserId: string | null;
+  },
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO registrations (
+        registration_id, event_id, type, status, waitlist_position,
+        participant_name, line_user_id, created_by_line_user_id,
+        created_by_display_name, created_at, updated_at,
+        registration_source, participant_line_user_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      values.registrationId,
+      values.eventId,
+      values.type,
+      values.status,
+      values.waitlistPosition,
+      values.participantName,
+      values.lineUserId,
+      values.createdByLineUserId,
+      values.createdByDisplayName,
+      values.createdAt,
+      values.createdAt,
+      values.registrationSource,
+      values.participantLineUserId,
+    );
+}
+
+export function prepareInsertEventStatement(
+  db: D1Database,
+  values: {
+    eventId: string;
+    groupId: string;
+    name: string;
+    startDate: string;
+    startTime: string;
+    startAt: string;
+    endDate: string;
+    endTime: string;
+    endAt: string;
+    address: string;
+    googleMapsUrl: string | null;
+    feeAmount: number;
+    capacity: number;
+    waitlistEnabled: boolean;
+    organizerLineUserId: string;
+    organizerDisplayName: string;
+    createdAt: string;
+  },
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO events (
+        event_id, group_id, name, event_date, event_time, event_at, start_at, end_at, address,
+        google_maps_url, fee_amount, capacity, waitlist_enabled, status, organizer_line_user_id,
+        organizer_display_name, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)`,
+    )
+    .bind(
+      values.eventId,
+      values.groupId,
+      values.name,
+      values.startDate,
+      values.startTime,
+      values.startAt,
+      values.startAt,
+      values.endAt,
+      values.address,
+      values.googleMapsUrl,
+      values.feeAmount,
+      values.capacity,
+      values.waitlistEnabled ? 1 : 0,
+      values.organizerLineUserId,
+      values.organizerDisplayName,
+      values.createdAt,
+      values.createdAt,
+    );
 }
 
 export async function deleteRegistrationRow(db: D1Database, registrationId: string): Promise<void> {
@@ -780,4 +898,83 @@ export async function acceptInviteRow(
     .bind(acceptedAt, acceptedByLineUserId, acceptedByDisplayName, inviteId)
     .run();
   return (result.meta.changes ?? 0) > 0;
+}
+
+export async function listCachedGroupMembers(
+  db: D1Database,
+  groupId: string,
+): Promise<GroupMemberRow[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT group_id, line_user_id, display_name, picture_url, synced_at
+       FROM group_members
+       WHERE group_id = ?
+       ORDER BY display_name COLLATE NOCASE ASC`,
+    )
+    .bind(groupId)
+    .all<GroupMemberRow>();
+  return results ?? [];
+}
+
+export async function getCachedGroupMembersByIds(
+  db: D1Database,
+  groupId: string,
+  lineUserIds: string[],
+): Promise<GroupMemberRow[]> {
+  if (lineUserIds.length === 0) return [];
+  const placeholders = lineUserIds.map(() => '?').join(', ');
+  const { results } = await db
+    .prepare(
+      `SELECT group_id, line_user_id, display_name, picture_url, synced_at
+       FROM group_members
+       WHERE group_id = ? AND line_user_id IN (${placeholders})`,
+    )
+    .bind(groupId, ...lineUserIds)
+    .all<GroupMemberRow>();
+  return results ?? [];
+}
+
+export async function replaceGroupMembersCache(
+  db: D1Database,
+  groupId: string,
+  members: Array<{
+    lineUserId: string;
+    displayName: string;
+    pictureUrl: string | null;
+  }>,
+  syncedAt: string,
+): Promise<void> {
+  const statements: D1PreparedStatement[] = [
+    db.prepare('DELETE FROM group_members WHERE group_id = ?').bind(groupId),
+  ];
+  for (const member of members) {
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO group_members (group_id, line_user_id, display_name, picture_url, synced_at)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          groupId,
+          member.lineUserId,
+          member.displayName,
+          member.pictureUrl,
+          syncedAt,
+        ),
+    );
+  }
+  await db.batch(statements);
+}
+
+export async function getGroupMembersCacheSyncedAt(
+  db: D1Database,
+  groupId: string,
+): Promise<string | null> {
+  const row = await db
+    .prepare(
+      `SELECT MAX(synced_at) AS synced_at FROM group_members WHERE group_id = ?`,
+    )
+    .bind(groupId)
+    .first<{ synced_at: string | null }>();
+  return row?.synced_at ?? null;
 }

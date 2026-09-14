@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { api } from '../api';
+import { api, ApiError } from '../api';
 import { EventForm } from '../components/EventForm';
 import { SiteNav } from '../components/SiteNav';
 import { StateBlock } from '../components/StateBlock';
 import type { LiffSession } from '../liff';
-import type { CreateEventInput } from '../../../shared/types';
+import type { CreateEventInput, GroupMemberPublic } from '../../../shared/types';
 
 export function EventCreatePage({ session }: { session: LiffSession }) {
   const navigate = useNavigate();
@@ -14,11 +14,43 @@ export function EventCreatePage({ session }: { session: LiffSession }) {
   const [copyInitial, setCopyInitial] = useState<Partial<CreateEventInput> | null>(null);
   const [copyError, setCopyError] = useState('');
   const [copyLoading, setCopyLoading] = useState(Boolean(copyId));
+  const [members, setMembers] = useState<GroupMemberPublic[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [membersLoading, setMembersLoading] = useState(true);
+  const [membersError, setMembersError] = useState('');
+
+  const loadMembers = useCallback(
+    async (forceRefresh = false) => {
+      setMembersLoading(true);
+      setMembersError('');
+      try {
+        const result = await api.listGroupMembers(session, { refresh: forceRefresh });
+        setMembers(result.members);
+      } catch (err) {
+        const message =
+          err instanceof ApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : '暫時無法取得群組成員';
+        setMembers([]);
+        setMembersError(message || '暫時無法取得群組成員');
+      } finally {
+        setMembersLoading(false);
+      }
+    },
+    [session],
+  );
+
+  useEffect(() => {
+    void loadMembers(false);
+  }, [loadMembers]);
 
   useEffect(() => {
     if (!copyId) {
       setCopyInitial(null);
       setCopyLoading(false);
+      setSelectedIds([]);
       return;
     }
     let cancelled = false;
@@ -35,6 +67,10 @@ export function EventCreatePage({ session }: { session: LiffSession }) {
           capacity: result.event.capacity,
           waitlistEnabled: result.event.waitlistEnabled,
         });
+        const preselect = result.event.registrations.confirmed
+          .map((item) => item.participantLineUserId || item.lineUserId)
+          .filter((id): id is string => Boolean(id));
+        setSelectedIds([...new Set(preselect)]);
       })
       .catch((err: Error) => {
         if (!cancelled) setCopyError(err.message);
@@ -70,13 +106,24 @@ export function EventCreatePage({ session }: { session: LiffSession }) {
         </button>
       </div>
       {copyId ? (
-        <p className="hint">已帶入名稱、地址、Google Maps 網址、費用與人數設定。報名名單、主揪轉移資料與舊活動 ID 不會複製。</p>
+        <p className="hint">
+          已帶入名稱、地址、Google Maps 網址、費用、人數，以及原活動具 LINE
+          身分的正式報名成員。文字代報、候補與已取消者不複製。請重新設定時間後建立。
+        </p>
       ) : null}
       <EventForm
         initial={copyInitial ?? undefined}
         submitLabel={copyId ? '建立複製活動' : '建立活動'}
         timeHint={copyId ? '請重新設定開始時間與結束時間' : undefined}
         onSubmit={handleSubmit}
+        memberPreselect={{
+          members,
+          selectedIds,
+          onSelectedIdsChange: setSelectedIds,
+          loading: membersLoading,
+          error: membersError,
+          onRetry: () => void loadMembers(true),
+        }}
       />
     </div>
   );
