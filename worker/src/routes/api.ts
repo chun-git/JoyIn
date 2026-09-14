@@ -31,13 +31,17 @@ import {
   previewTransferInvite,
 } from '../services/transfer';
 import { cancelRegistration, joinProxy, joinSelf } from '../services/registrations';
+import {
+  recoverContextFromEventId,
+  refreshExpiredContext,
+} from '../services/context-recovery';
 import type { CopyEventInput, UpdateEventInput } from '../../../shared/types';
 
 export const api = new Hono<AppEnv>();
 
 api.onError((err, c) => {
   const { status, body } = handleRouteError(err);
-  return c.json(body, status as 400 | 401 | 403 | 404 | 409 | 410 | 500);
+  return c.json(body, status as 400 | 401 | 403 | 404 | 409 | 410 | 429 | 500);
 });
 
 api.get('/health', (c) => c.json({ ok: true, service: 'joyin' }));
@@ -65,6 +69,42 @@ api.use('/events/*', liffAuth);
 api.use('/events', liffAuth);
 api.use('/registrations/*', liffAuth);
 api.use('/transfer-invites/*', liffAuth);
+api.use('/context/*', liffAuth);
+
+/**
+ * Refresh an expired group context when HMAC is still valid and the user is a group member.
+ * Body: { context: string } — never accepts client groupId.
+ */
+api.post('/context/refresh', async (c) => {
+  const body = parseJson<Record<string, unknown>>(await c.req.json());
+  const contextToken = requireString(body.context, 'context', 10, 2048);
+  const result = await refreshExpiredContext({
+    secret: c.env.LIFF_CONTEXT_SIGNING_SECRET,
+    channelAccessToken: c.env.LINE_CHANNEL_ACCESS_TOKEN,
+    contextToken,
+    user: userOf(c),
+    allowTestAuth: c.env.ALLOW_TEST_AUTH === 'true',
+  });
+  return c.json(result);
+});
+
+/**
+ * Recover group context from a legacy deep link that only has eventId.
+ * Never returns event payload; membership must succeed.
+ */
+api.post('/context/recover-event', async (c) => {
+  const body = parseJson<Record<string, unknown>>(await c.req.json());
+  const eventId = requireString(body.eventId, 'eventId', 8, 80);
+  const result = await recoverContextFromEventId({
+    db: c.env.DB,
+    secret: c.env.LIFF_CONTEXT_SIGNING_SECRET,
+    channelAccessToken: c.env.LINE_CHANNEL_ACCESS_TOKEN,
+    eventId,
+    user: userOf(c),
+    allowTestAuth: c.env.ALLOW_TEST_AUTH === 'true',
+  });
+  return c.json(result);
+});
 
 api.get('/events', async (c) => {
   const groupId = requireGroupId(c);

@@ -558,7 +558,8 @@ describe('organizer permissions', () => {
     const missing = await json(`/api/events/${eventId}`, {
       headers: await authHeaders('U-amy', 'Amy'),
     });
-    expect(missing.status).toBe(404);
+    expect(missing.status).toBe(410);
+    expect((missing.body as { error?: string }).error).toBe('event_deleted');
   });
 
   it('requires confirmation before time or location changes', async () => {
@@ -985,7 +986,128 @@ describe('copy event', () => {
       headers: await authHeaders('U-amy', 'Amy', 'G-other'),
     });
     expect(missing.status).toBe(404);
-    expect((missing.body as { error?: string }).error).toBe('NOT_FOUND');
+    expect((missing.body as { error?: string }).error).toBe('event_not_found');
+  });
+
+  it('returns event_ended for finished events and event_deleted for soft-deleted', async () => {
+    const { env } = await import('cloudflare:test');
+    const created = await createEvent('U-lee', 'Lee', { name: '已結束活動' });
+    const eventId = created.body.event.eventId;
+    await env.DB.prepare(`UPDATE events SET end_at = ? WHERE event_id = ?`)
+      .bind('2020-01-01T00:00:00.000Z', eventId)
+      .run();
+
+    const ended = await json(`/api/events/${eventId}`, {
+      headers: await authHeaders('U-lee', 'Lee'),
+    });
+    expect(ended.status).toBe(410);
+    expect((ended.body as { error?: string }).error).toBe('event_ended');
+
+    const open = await createEvent('U-lee', 'Lee', { name: '待刪活動' });
+    await json(`/api/events/${open.body.event.eventId}`, {
+      method: 'DELETE',
+      headers: await authHeaders('U-lee', 'Lee'),
+    });
+    const deleted = await json(`/api/events/${open.body.event.eventId}`, {
+      headers: await authHeaders('U-lee', 'Lee'),
+    });
+    expect(deleted.status).toBe(410);
+    expect((deleted.body as { error?: string }).error).toBe('event_deleted');
+  });
+
+  it('still returns CLOSED event detail before end time', async () => {
+    const created = await createEvent('U-lee', 'Lee', { name: '已關閉報名' });
+    const eventId = created.body.event.eventId;
+    await json(`/api/events/${eventId}/close`, {
+      method: 'POST',
+      headers: await authHeaders('U-lee', 'Lee'),
+    });
+    const detail = await json<{ event: { status: string; name: string } }>(`/api/events/${eventId}`, {
+      headers: await authHeaders('U-amy', 'Amy'),
+    });
+    expect(detail.status).toBe(200);
+    expect(detail.body.event.status).toBe('CLOSED');
+    expect(detail.body.event.name).toBe('已關閉報名');
+  });
+});
+
+describe('context refresh and legacy recovery', () => {
+  it('refreshes expired-but-valid context for group members', async () => {
+    const { env } = await import('cloudflare:test');
+    const { signLiffContext } = await import('../src/lib/liff-context');
+    const expired = await signLiffContext(
+      env.LIFF_CONTEXT_SIGNING_SECRET,
+      'G-test-group',
+      Date.now(),
+      -60_000,
+    );
+    const refreshed = await json<{ context: string }>('/api/context/refresh', {
+      method: 'POST',
+      headers: authOnlyHeaders('U-amy', 'Amy'),
+      body: JSON.stringify({ context: expired }),
+    });
+    expect(refreshed.status).toBe(200);
+    expect(refreshed.body.context).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+
+    const list = await json<{ events: unknown[] }>('/api/events', {
+      headers: {
+        Authorization: 'Bearer test:U-amy:Amy',
+        'Content-Type': 'application/json',
+        'X-JoyIn-Context': refreshed.body.context,
+      },
+    });
+    expect(list.status).toBe(200);
+  });
+
+  it('rejects refresh when signature is wrong', async () => {
+    const { env } = await import('cloudflare:test');
+    const { signLiffContext } = await import('../src/lib/liff-context');
+    const expired = await signLiffContext(
+      env.LIFF_CONTEXT_SIGNING_SECRET,
+      'G-test-group',
+      Date.now(),
+      -60_000,
+    );
+    const tampered = `${expired.slice(0, -4)}xxxx`;
+    const rejected = await json('/api/context/refresh', {
+      method: 'POST',
+      headers: authOnlyHeaders('U-amy', 'Amy'),
+      body: JSON.stringify({ context: tampered }),
+    });
+    expect(rejected.status).toBe(401);
+    expect((rejected.body as { error?: string }).error).toBe('context_signature_mismatch');
+  });
+
+  it('recovers context from eventId for group members without leaking event payload', async () => {
+    const created = await createEvent('U-lee', 'Lee', { name: '舊卡片恢復' });
+    const recovered = await json<{ context: string; event?: unknown }>('/api/context/recover-event', {
+      method: 'POST',
+      headers: authOnlyHeaders('U-bob', 'Bob'),
+      body: JSON.stringify({ eventId: created.body.event.eventId }),
+    });
+    expect(recovered.status).toBe(200);
+    expect(recovered.body.context).toBeTruthy();
+    expect(recovered.body.event).toBeUndefined();
+
+    const list = await json<{ events: Array<{ name: string }> }>('/api/events', {
+      headers: {
+        Authorization: 'Bearer test:U-bob:Bob',
+        'Content-Type': 'application/json',
+        'X-JoyIn-Context': recovered.body.context,
+      },
+    });
+    expect(list.status).toBe(200);
+    expect(list.body.events.some((e) => e.name === '舊卡片恢復')).toBe(true);
+  });
+
+  it('uses one external error for unknown eventId recovery', async () => {
+    const rejected = await json('/api/context/recover-event', {
+      method: 'POST',
+      headers: authOnlyHeaders('U-amy', 'Amy'),
+      body: JSON.stringify({ eventId: '00000000-0000-4000-8000-000000000099' }),
+    });
+    expect(rejected.status).toBe(403);
+    expect((rejected.body as { error?: string }).error).toBe('link_unrecoverable');
   });
 });
 

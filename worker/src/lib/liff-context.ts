@@ -251,6 +251,26 @@ export async function verifyLiffContext(
   token: string,
   nowMs = Date.now(),
 ): Promise<{ groupId: string; expiresAt: number; nonce: string }> {
+  const verified = await verifyLiffContextSignature(secret, token, nowMs);
+  if (verified.expired) {
+    throw new LiffContextError('context_expired', 'token expired');
+  }
+  return {
+    groupId: verified.groupId,
+    expiresAt: verified.expiresAt,
+    nonce: verified.nonce,
+  };
+}
+
+/**
+ * Verify HMAC + payload shape. Does not reject solely for expiry.
+ * Used by context refresh — never for normal group-scoped APIs.
+ */
+export async function verifyLiffContextSignature(
+  secret: string,
+  token: string,
+  nowMs = Date.now(),
+): Promise<{ groupId: string; expiresAt: number; nonce: string; expired: boolean }> {
   if (!secret) {
     throw new LiffContextError('context_secret_missing', 'missing signing secret');
   }
@@ -287,16 +307,12 @@ export async function verifyLiffContext(
   if (typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) {
     throw new LiffContextError('context_payload_invalid', 'missing expiry');
   }
-  if (payload.exp <= nowMs) {
-    throw new LiffContextError('context_expired', 'token expired');
-  }
 
-  // Intentionally does NOT accept or compare any userId / signer.
-  // Authorization (current user) is verified separately from X-JoyIn-Context (group).
   return {
     groupId: payload.g.trim(),
     expiresAt: payload.exp,
     nonce: payload.n,
+    expired: payload.exp <= nowMs,
   };
 }
 

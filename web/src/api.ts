@@ -65,11 +65,16 @@ export function resolveFreshIdToken(session: LiffSession, nowMs = Date.now()): s
   return raw.trim();
 }
 
-async function request<T>(path: string, session: LiffSession, init: RequestInit = {}): Promise<T> {
+async function request<T>(
+  path: string,
+  session: LiffSession,
+  init: RequestInit = {},
+  options?: { omitContext?: boolean },
+): Promise<T> {
   const idToken = resolveFreshIdToken(session);
   const headers = new Headers(init.headers);
   headers.set('Authorization', buildAuthorizationHeader(idToken));
-  if (session.contextToken) {
+  if (!options?.omitContext && session.contextToken) {
     headers.set('X-JoyIn-Context', session.contextToken);
   }
   if (init.body && !headers.has('Content-Type')) {
@@ -137,4 +142,20 @@ export const api = {
     request<{ event: EventSummary }>(`/api/transfer-invites/${token}/accept`, session, {
       method: 'POST',
     }),
+  /** Refresh expired context — send token in body only (not X-JoyIn-Context). */
+  refreshContext: (session: LiffSession, contextToken: string) =>
+    request<{ context: string }>(
+      '/api/context/refresh',
+      session,
+      { method: 'POST', body: JSON.stringify({ context: contextToken }) },
+      { omitContext: true },
+    ),
+  /** Recover context from legacy eventId deep link. */
+  recoverContextFromEvent: (session: LiffSession, eventId: string) =>
+    request<{ context: string }>(
+      '/api/context/recover-event',
+      session,
+      { method: 'POST', body: JSON.stringify({ eventId }) },
+      { omitContext: true },
+    ),
 };

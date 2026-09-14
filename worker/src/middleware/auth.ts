@@ -23,7 +23,7 @@ interface LineVerifyResponse {
 
 /** User-facing copy when group context is missing */
 export const GROUP_CONTEXT_REQUIRED_MESSAGE =
-  '請回到 LINE 群組輸入 /list，並從活動卡片開啟 JoyIn';
+  '請回到 LINE 群組輸入 /list，並從最新活動卡片開啟 JoyIn';
 
 /** User-facing copy when a context token is present but invalid */
 export const GROUP_CONTEXT_INVALID_MESSAGE = '活動連結已失效，請重新輸入 /list';

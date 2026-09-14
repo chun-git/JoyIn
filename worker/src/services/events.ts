@@ -37,16 +37,24 @@ export async function listEvents(
 
 export async function getVisibleEvent(db: D1Database, eventId: string, groupId?: string) {
   const row = await getEventRow(db, eventId);
-  if (!row || row.status === 'DELETED') {
-    throw Errors.notFound('找不到活動');
+  if (!row) {
+    throw Errors.eventNotFound();
+  }
+  if (row.status === 'DELETED') {
+    // Same group: tell the client it was deleted. Cross-group: do not leak.
+    if (groupId && row.group_id !== groupId) {
+      throw Errors.eventNotFound();
+    }
+    throw Errors.eventDeleted();
   }
   if (groupId && row.group_id !== groupId) {
     // Do not leak whether the event exists in another group.
-    throw Errors.notFound('找不到活動');
+    throw Errors.eventNotFound();
   }
   if (isExpired(endAtOf(row))) {
-    throw Errors.gone('活動已結束');
+    throw Errors.eventEnded();
   }
+  // CLOSED events remain visible (registration blocked elsewhere).
   return row;
 }
 

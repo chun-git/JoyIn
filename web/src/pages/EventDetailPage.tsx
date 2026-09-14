@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { EventDetail, RegistrationRecord, TransferInviteCreated } from '../../../shared/types';
 import { api } from '../api';
+import { bootEventDetailPage } from '../event-detail-boot';
 import { cancelListButtonLabel } from '../cancel-registration-copy';
 import { CancelRegistrationDialog } from '../components/CancelRegistrationDialog';
 import { EventCard } from '../components/EventCard';
@@ -124,18 +125,31 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
 
   useEffect(() => {
     let cancelled = false;
-    api
-      .getEvent(session, eventId)
-      .then((result) => {
-        if (!cancelled) setEvent(result.event);
-      })
-      .catch((err: Error) => {
-        if (!cancelled) setError(err.message);
-      });
+    setError('');
+    setEvent(null);
+    void bootEventDetailPage(session, eventId).then((result) => {
+      if (cancelled) return;
+      if (result.kind === 'ready') {
+        setEvent(result.event);
+        return;
+      }
+      if (result.kind === 'redirect_list') {
+        navigate('/events', {
+          replace: true,
+          state: result.toast ? { listToast: result.toast } : undefined,
+        });
+        return;
+      }
+      if (result.kind === 'unrecoverable') {
+        setError(result.message);
+        return;
+      }
+      setError(result.message);
+    });
     return () => {
       cancelled = true;
     };
-  }, [eventId, session]);
+  }, [eventId, session, navigate]);
 
   async function run(action: () => Promise<unknown>, success: string) {
     setPending(true);
@@ -172,7 +186,14 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
   const justCopied = searchParams.get('copied') === '1';
 
   if (!event && !error) return <StateBlock kind="loading" title="載入活動中…" />;
-  if (error && !event) return <StateBlock kind="error" title="無法載入活動">{error}</StateBlock>;
+  if (error && !event) {
+    const unrecoverable = error.includes('/list');
+    return (
+      <StateBlock kind="error" title={unrecoverable ? error : '無法載入活動'}>
+        {unrecoverable ? null : error}
+      </StateBlock>
+    );
+  }
   if (!event) return null;
 
   const full = event.confirmedCount >= event.capacity;

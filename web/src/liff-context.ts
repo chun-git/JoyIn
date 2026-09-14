@@ -2,9 +2,12 @@
 export const JOYIN_CONTEXT_STORAGE_KEY = 'joyin_liff_context';
 
 export const CONTEXT_MISSING_MESSAGE =
-  '請回到 LINE 群組輸入 /list，並從活動卡片開啟 JoyIn';
+  '請回到 LINE 群組輸入 /list，並從最新活動卡片開啟 JoyIn';
 
 export const CONTEXT_INVALID_MESSAGE = '活動連結已失效，請重新輸入 /list';
+
+export const LINK_UNRECOVERABLE_MESSAGE =
+  '此活動連結已失效，請回群組重新輸入 /list';
 
 /** Must match Worker signed token shape: base64url.payload */
 export const LIFF_CONTEXT_TOKEN_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
@@ -150,17 +153,17 @@ function acceptContextToken(
   nowMs: number,
 ): string {
   if (!token || !isJoyInContextTokenFormat(token)) return '';
-  if (isContextTokenExpired(token, nowMs)) {
-    safeStorageRemove(storage, JOYIN_CONTEXT_STORAGE_KEY);
-    return '';
-  }
+  // Keep expired-but-well-formed tokens so the app can call context refresh.
+  // Do NOT clear sessionStorage here — that misclassified ended cards as「context 缺失」.
+  void nowMs;
+  void storage;
   return token;
 }
 
 /**
  * Persist context from the current page URL before `liff.init()`.
  * A new /list context always overwrites any previous stored context.
- * Expired tokens are discarded.
+ * Expired tokens are kept for refresh (signature still verified server-side).
  */
 export function preserveJoyInContextBeforeInit(options?: {
   search?: string;
@@ -186,12 +189,6 @@ export function preserveJoyInContextBeforeInit(options?: {
   if (token) {
     // New card context overwrites any previous group context in this browser session.
     safeStorageSet(storage, JOYIN_CONTEXT_STORAGE_KEY, token);
-  } else {
-    // Drop expired / invalid tokens left in storage when opening without a fresh context.
-    const stored = safeStorageGet(storage, JOYIN_CONTEXT_STORAGE_KEY);
-    if (stored && isContextTokenExpired(stored, nowMs)) {
-      safeStorageRemove(storage, JOYIN_CONTEXT_STORAGE_KEY);
-    }
   }
   return token;
 }
@@ -200,7 +197,7 @@ export function preserveJoyInContextBeforeInit(options?: {
  * Resolve signed JoyIn context token after LIFF is ready.
  * Order: location.search → liff.state → sessionStorage.
  *
- * New URL context always overwrites storage. Expired tokens are cleared.
+ * Expired tokens are retained for refresh — never treated as missing here.
  * Never use localStorage for context or Authorization.
  */
 export function getJoyInContextToken(options?: {
@@ -246,6 +243,20 @@ export function getJoyInContextToken(options?: {
   }
 
   return { token: '', source: '' };
+}
+
+/** Persist a freshly minted context onto the live session + sessionStorage. */
+export function applyContextTokenToSession(session: { contextToken: string }, token: string): void {
+  const trimmed = token.trim();
+  if (!isJoyInContextTokenFormat(trimmed)) return;
+  session.contextToken = trimmed;
+  if (typeof window !== 'undefined') {
+    try {
+      window.sessionStorage.setItem(JOYIN_CONTEXT_STORAGE_KEY, trimmed);
+    } catch {
+      // ignore
+    }
+  }
 }
 
 /** Safe diagnostics only — never includes the token value. */

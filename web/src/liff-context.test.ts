@@ -165,12 +165,12 @@ describe('context expiry and overwrite', () => {
     expect(storage.getItem(JOYIN_CONTEXT_STORAGE_KEY)).toBe(newer);
   });
 
-  it('clears expired context from sessionStorage', () => {
+  it('keeps expired context for refresh instead of treating as missing', () => {
     const storage = memoryStorage();
     const expired = encodeContextPayload({ g: 'G-x', exp: Date.now() - 1_000, n: 'n3' });
     storage.setItem(JOYIN_CONTEXT_STORAGE_KEY, expired);
     const result = getJoyInContextToken({ search: '', storage, nowMs: Date.now() });
-    expect(result.token).toBe('');
-    expect(storage.getItem(JOYIN_CONTEXT_STORAGE_KEY)).toBeNull();
+    expect(result.token).toBe(expired);
+    expect(storage.getItem(JOYIN_CONTEXT_STORAGE_KEY)).toBe(expired);
   });
 });

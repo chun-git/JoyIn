@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type { EventSummary } from '../../../shared/types';
 import { api, ApiError } from '../api';
 import { AuthExpiredPanel } from '../components/AuthExpiredPanel';
@@ -17,6 +17,7 @@ export function EventListPage({
   onFlowPhase?: (phase: JoyInFlowPhase) => void;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const showDiag = searchParams.get('diag') === '1';
   const [events, setEvents] = useState<EventSummary[]>([]);
@@ -24,6 +25,16 @@ export function EventListPage({
   const [error, setError] = useState('');
   const [errorTitle, setErrorTitle] = useState('無法載入活動');
   const [listStatus, setListStatus] = useState<number | null>(null);
+  const [toast] = useState(() => {
+    const state = location.state as { listToast?: string } | null;
+    return typeof state?.listToast === 'string' ? state.listToast : '';
+  });
+
+  useEffect(() => {
+    if (!toast) return;
+    // One-shot: clear history state so refresh does not repeat the toast.
+    navigate('/events', { replace: true, state: null });
+  }, [toast, navigate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,7 +66,6 @@ export function EventListPage({
             const code = err instanceof ApiError ? err.code : '';
             const apiMessage = err instanceof ApiError ? err.message : err.message;
             if (code.startsWith('context_')) {
-              // Group context errors — not "wrong person"; any member with a valid card may open.
               setErrorTitle(code === 'context_missing' ? CONTEXT_MISSING_MESSAGE : CONTEXT_INVALID_MESSAGE);
               setError(
                 code === 'context_missing'
@@ -105,6 +115,11 @@ export function EventListPage({
     <div className="stack">
       <SiteNav current="events" />
       <p className="list-greeting">嗨 {session.displayName}，來看看群組活動</p>
+      {toast ? (
+        <div className="toast" role="status">
+          {toast}
+        </div>
+      ) : null}
       {showDiag ? (
         <section className="panel" aria-label="群組診斷">
           <strong>群組診斷（僅 ?diag=1）</strong>

@@ -69,11 +69,14 @@ function isLoginFailedError(code?: string, message?: string): boolean {
 function GroupGate({
   session,
   children,
+  allowMissingContext = false,
 }: {
   session: LiffSession;
   children: ReactNode;
+  /** Event detail may recover via eventId when context is absent. */
+  allowMissingContext?: boolean;
 }) {
-  if (!session.contextToken) {
+  if (!session.contextToken && !allowMissingContext) {
     return (
       <div className="stack">
         <SiteNav current="events" />
@@ -274,7 +277,7 @@ function LiffApp() {
         <Route
           path="/events/:eventId"
           element={
-            <GroupGate session={session}>
+            <GroupGate session={session} allowMissingContext>
               <EventDetailPage session={session} />
             </GroupGate>
           }
