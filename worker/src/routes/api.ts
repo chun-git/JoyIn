@@ -33,7 +33,7 @@ import {
   previewTransferInvite,
 } from '../services/transfer';
 import { cancelRegistration, joinProxy, joinSelf } from '../services/registrations';
-import { listGroupMembersForClient } from '../services/group-members';
+import { buildPreselectMemberRoster } from '../services/group-members';
 import {
   recoverContextFromEventId,
   refreshExpiredContext,
@@ -132,16 +132,14 @@ api.get('/events', async (c) => {
 api.get('/group/members', async (c) => {
   const groupId = requireGroupId(c);
   const forceRefresh = c.req.query('refresh') === '1';
-  const result = await listGroupMembersForClient(
+  const copyEventId = (c.req.query('copyEventId') || '').trim();
+  const result = await buildPreselectMemberRoster(
     c.env.DB,
     groupId,
     c.env.LINE_CHANNEL_ACCESS_TOKEN,
-    { forceRefresh },
+    { forceRefresh, copyEventId: copyEventId || undefined },
   );
-  return c.json({
-    members: result.members,
-    syncedAt: result.syncedAt,
-  });
+  return c.json(result);
 });
 
 api.post('/events', async (c) => {

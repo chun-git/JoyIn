@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { api, ApiError } from '../api';
+import type { CreateEventInput, PreselectMemberItem } from '../../../shared/types';
+import { api } from '../api';
 import { EventForm } from '../components/EventForm';
 import { SiteNav } from '../components/SiteNav';
 import { StateBlock } from '../components/StateBlock';
 import type { LiffSession } from '../liff';
-import type { CreateEventInput, GroupMemberPublic } from '../../../shared/types';
 
 export function EventCreatePage({ session }: { session: LiffSession }) {
   const navigate = useNavigate();
@@ -14,32 +14,45 @@ export function EventCreatePage({ session }: { session: LiffSession }) {
   const [copyInitial, setCopyInitial] = useState<Partial<CreateEventInput> | null>(null);
   const [copyError, setCopyError] = useState('');
   const [copyLoading, setCopyLoading] = useState(Boolean(copyId));
-  const [members, setMembers] = useState<GroupMemberPublic[]>([]);
+  const [members, setMembers] = useState<PreselectMemberItem[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [membersLoading, setMembersLoading] = useState(true);
-  const [membersError, setMembersError] = useState('');
+  const [membersHint, setMembersHint] = useState<string | null>(null);
+  const [emptyMessage, setEmptyMessage] = useState<string | null>(null);
+  const [attendedTitle, setAttendedTitle] = useState('上次參加');
+  const [waitlistTitle, setWaitlistTitle] = useState('上次候補');
 
   const loadMembers = useCallback(
     async (forceRefresh = false) => {
       setMembersLoading(true);
-      setMembersError('');
       try {
-        const result = await api.listGroupMembers(session, { refresh: forceRefresh });
+        const result = await api.listGroupMembers(session, {
+          refresh: forceRefresh,
+          copyEventId: copyId || undefined,
+        });
         setMembers(result.members);
-      } catch (err) {
-        const message =
-          err instanceof ApiError
-            ? err.message
-            : err instanceof Error
-              ? err.message
-              : '暫時無法取得群組成員';
-        setMembers([]);
-        setMembersError(message || '暫時無法取得群組成員');
+        setMembersHint(result.hint);
+        setEmptyMessage(result.emptyMessage);
+        setAttendedTitle(result.attendedTitle);
+        setWaitlistTitle(result.waitlistTitle);
+        setSelectedIds((prev) => {
+          if (!forceRefresh) return result.defaultSelectedIds;
+          const valid = new Set(result.members.map((m) => m.lineUserId));
+          return prev.filter((id) => valid.has(id));
+        });
+      } catch {
+        setMembersHint('目前顯示最近使用過的會員名單');
+        setMembers((prev) => {
+          if (prev.length === 0) {
+            setEmptyMessage('目前還沒有可選擇的會員');
+          }
+          return prev;
+        });
       } finally {
         setMembersLoading(false);
       }
     },
-    [session],
+    [copyId, session],
   );
 
   useEffect(() => {
@@ -50,7 +63,6 @@ export function EventCreatePage({ session }: { session: LiffSession }) {
     if (!copyId) {
       setCopyInitial(null);
       setCopyLoading(false);
-      setSelectedIds([]);
       return;
     }
     let cancelled = false;
@@ -67,10 +79,6 @@ export function EventCreatePage({ session }: { session: LiffSession }) {
           capacity: result.event.capacity,
           waitlistEnabled: result.event.waitlistEnabled,
         });
-        const preselect = result.event.registrations.confirmed
-          .map((item) => item.participantLineUserId || item.lineUserId)
-          .filter((id): id is string => Boolean(id));
-        setSelectedIds([...new Set(preselect)]);
       })
       .catch((err: Error) => {
         if (!cancelled) setCopyError(err.message);
@@ -108,7 +116,7 @@ export function EventCreatePage({ session }: { session: LiffSession }) {
       {copyId ? (
         <p className="hint">
           已帶入名稱、地址、Google Maps 網址、費用、人數，以及原活動具 LINE
-          身分的正式報名成員。文字代報、候補與已取消者不複製。請重新設定時間後建立。
+          身分的正式報名成員。文字代報、候補與已取消者不預選。請重新設定時間後建立。
         </p>
       ) : null}
       <EventForm
@@ -118,11 +126,14 @@ export function EventCreatePage({ session }: { session: LiffSession }) {
         onSubmit={handleSubmit}
         memberPreselect={{
           members,
+          attendedTitle,
+          waitlistTitle,
           selectedIds,
           onSelectedIdsChange: setSelectedIds,
           loading: membersLoading,
-          error: membersError,
-          onRetry: () => void loadMembers(true),
+          hint: membersHint,
+          emptyMessage,
+          onRefresh: () => void loadMembers(true),
         }}
       />
     </div>

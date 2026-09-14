@@ -15,7 +15,17 @@ vi.mock('./api', () => ({
     getEvent: (...args: unknown[]) => getEvent(...args),
     copyEvent: (...args: unknown[]) => copyEvent(...args),
     createEvent: (...args: unknown[]) => createEvent(...args),
-    listGroupMembers: vi.fn(async () => ({ members: [], syncedAt: null })),
+    listGroupMembers: vi.fn(async () => ({
+      members: [],
+      sections: { attended: [], waitlist: [], other: [] },
+      attendedTitle: '上次參加',
+      waitlistTitle: '上次候補',
+      defaultSelectedIds: [],
+      lineSyncStatus: 'skipped',
+      hint: null,
+      emptyMessage: '目前還沒有可選擇的會員',
+      syncedAt: null,
+    })),
   },
   ApiError: class ApiError extends Error {
     constructor(

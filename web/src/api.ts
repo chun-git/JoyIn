@@ -3,7 +3,7 @@ import type {
   CreateEventInput,
   EventDetail,
   EventSummary,
-  GroupMemberPublic,
+  PreselectMemberRoster,
   TransferInviteCreated,
   TransferInvitePreview,
   UpdateEventInput,
@@ -180,11 +180,16 @@ async function request<T>(
 export const api = {
   listEvents: (session: LiffSession) =>
     request<{ events: EventSummary[] }>('/api/events', session),
-  listGroupMembers: (session: LiffSession, options?: { refresh?: boolean }) =>
-    request<{ members: GroupMemberPublic[]; syncedAt: string | null }>(
-      `/api/group/members${options?.refresh ? '?refresh=1' : ''}`,
-      session,
-    ),
+  listGroupMembers: (
+    session: LiffSession,
+    options?: { refresh?: boolean; copyEventId?: string },
+  ) => {
+    const params = new URLSearchParams();
+    if (options?.refresh) params.set('refresh', '1');
+    if (options?.copyEventId) params.set('copyEventId', options.copyEventId);
+    const qs = params.toString();
+    return request<PreselectMemberRoster>(`/api/group/members${qs ? `?${qs}` : ''}`, session);
+  },
   getEvent: (session: LiffSession, eventId: string) =>
     request<{ event: EventDetail }>(`/api/events/${eventId}`, session),
   createEvent: (session: LiffSession, input: CreateEventInput) =>

@@ -5,10 +5,11 @@ import { authHeaders, createEvent, futureRange, json } from './helpers';
 
 async function seedMembers(
   members: Array<{ lineUserId: string; displayName: string; pictureUrl?: string | null }>,
+  groupId = 'G-test-group',
 ) {
   await replaceGroupMembersCache(
     env.DB,
-    'G-test-group',
+    groupId,
     members.map((m) => ({
       lineUserId: m.lineUserId,
       displayName: m.displayName,
@@ -19,7 +20,7 @@ async function seedMembers(
 }
 
 describe('group members + organizer preselect', () => {
-  it('lists cached group members without exposing groupId', async () => {
+  it('lists prioritized roster without exposing groupId', async () => {
     await seedMembers([
       { lineUserId: 'U-amy', displayName: 'Amy', pictureUrl: 'https://example.com/a.png' },
       { lineUserId: 'U-bob', displayName: 'Bob' },
@@ -27,25 +28,128 @@ describe('group members + organizer preselect', () => {
     const listed = await json<{
       members: Array<{ lineUserId: string; displayName: string; pictureUrl: string | null }>;
       groupId?: string;
+      emptyMessage: string | null;
     }>('/api/group/members', {
       headers: await authHeaders('U-lee', 'Lee'),
     });
     expect(listed.status).toBe(200);
     expect(listed.body.members).toHaveLength(2);
     expect(listed.body.members.map((m) => m.lineUserId).sort()).toEqual(['U-amy', 'U-bob']);
+    expect(listed.body.emptyMessage).toBeNull();
     expect(JSON.stringify(listed.body)).not.toContain('G-test-group');
     expect(JSON.stringify(listed.body)).not.toContain('test-access-token');
   });
 
-  it('returns group_members_unavailable when LINE fails and cache is empty', async () => {
+  it('falls back to D1 cache with soft hint when LINE fails', async () => {
+    await seedMembers([{ lineUserId: 'U-cached', displayName: 'Cached' }]);
     const fetchImpl = vi.fn(async () => new Response('nope', { status: 500 }));
-    const { listGroupMembersForClient } = await import('../src/services/group-members');
-    await expect(
-      listGroupMembersForClient(env.DB, 'G-empty-group', 'token', {
-        fetchImpl: fetchImpl as unknown as typeof fetch,
-        forceRefresh: true,
-      }),
-    ).rejects.toMatchObject({ code: 'group_members_unavailable' });
+    const { buildPreselectMemberRoster } = await import('../src/services/group-members');
+    const roster = await buildPreselectMemberRoster(env.DB, 'G-test-group', 'token', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      forceRefresh: true,
+    });
+    expect(roster.members.map((m) => m.lineUserId)).toEqual(['U-cached']);
+    expect(roster.lineSyncStatus).toBe('failed');
+    expect(roster.hint).toBe('目前顯示最近使用過的會員名單');
+    expect(roster.emptyMessage).toBeNull();
+  });
+
+  it('returns soft empty message when LINE fails and no D1 members exist', async () => {
+    const fetchImpl = vi.fn(async () => new Response('nope', { status: 500 }));
+    const { buildPreselectMemberRoster } = await import('../src/services/group-members');
+    const roster = await buildPreselectMemberRoster(env.DB, 'G-empty-group', 'token', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      forceRefresh: true,
+    });
+    expect(roster.members).toEqual([]);
+    expect(roster.lineSyncStatus).toBe('failed');
+    expect(roster.emptyMessage).toBe('目前還沒有可選擇的會員');
+    expect(roster.hint).toBeNull();
+  });
+
+  it('orders copy roster: confirmed selected, waitlist unselected, then other cache', async () => {
+    await seedMembers([
+      { lineUserId: 'U-amy', displayName: 'Amy' },
+      { lineUserId: 'U-bob', displayName: 'Bob' },
+      { lineUserId: 'U-cara', displayName: 'Cara' },
+      { lineUserId: 'U-zoe', displayName: 'Zoe' },
+    ]);
+    const source = await createEvent('U-lee', 'Lee', {
+      name: '來源活動',
+      capacity: 1,
+      waitlistEnabled: true,
+      preselectedMemberIds: ['U-amy'],
+    });
+    const eventId = source.body.event.eventId as string;
+    await json(`/api/events/${eventId}/join`, {
+      method: 'POST',
+      headers: await authHeaders('U-bob', 'Bob'),
+    });
+
+    const listed = await json<{
+      members: Array<{
+        lineUserId: string;
+        section: string;
+        defaultSelected: boolean;
+      }>;
+      attendedTitle: string;
+      waitlistTitle: string;
+      defaultSelectedIds: string[];
+    }>(`/api/group/members?copyEventId=${encodeURIComponent(eventId)}`, {
+      headers: await authHeaders('U-lee', 'Lee'),
+    });
+    expect(listed.status).toBe(200);
+    expect(listed.body.attendedTitle).toBe('原活動參加者');
+    expect(listed.body.waitlistTitle).toBe('原活動候補');
+    expect(listed.body.defaultSelectedIds).toEqual(['U-amy']);
+    expect(listed.body.members.map((m) => m.lineUserId)).toEqual([
+      'U-amy',
+      'U-bob',
+      'U-cara',
+      'U-zoe',
+    ]);
+    expect(listed.body.members[0]).toMatchObject({
+      lineUserId: 'U-amy',
+      section: 'attended',
+      defaultSelected: true,
+    });
+    expect(listed.body.members[1]).toMatchObject({
+      lineUserId: 'U-bob',
+      section: 'waitlist',
+      defaultSelected: false,
+    });
+    expect(listed.body.members.slice(2).every((m) => m.section === 'other')).toBe(true);
+  });
+
+  it('for new events, recent confirmed are listed first but not default-selected', async () => {
+    await seedMembers([
+      { lineUserId: 'U-amy', displayName: 'Amy' },
+      { lineUserId: 'U-dan', displayName: 'Dan' },
+    ]);
+    await createEvent('U-lee', 'Lee', {
+      name: '上次活動',
+      capacity: 3,
+      preselectedMemberIds: ['U-amy'],
+    });
+
+    const listed = await json<{
+      members: Array<{ lineUserId: string; section: string; defaultSelected: boolean }>;
+      attendedTitle: string;
+      defaultSelectedIds: string[];
+    }>('/api/group/members', {
+      headers: await authHeaders('U-lee', 'Lee'),
+    });
+    expect(listed.status).toBe(200);
+    expect(listed.body.attendedTitle).toBe('上次參加');
+    expect(listed.body.defaultSelectedIds).toEqual([]);
+    expect(listed.body.members[0]).toMatchObject({
+      lineUserId: 'U-amy',
+      section: 'attended',
+      defaultSelected: false,
+    });
+    expect(listed.body.members.some((m) => m.lineUserId === 'U-dan' && m.section === 'other')).toBe(
+      true,
+    );
   });
 
   it('paginates LINE member ids via continuationToken', async () => {
@@ -181,7 +285,6 @@ describe('group members + organizer preselect', () => {
       headers: await authHeaders('U-lee', 'Lee'),
       body: JSON.stringify({ participantName: '代報朋友' }),
     });
-    // Fill capacity then waitlist Bob via self join after closing spots — capacity 2: amy + proxy = full
     const wait = await json(`/api/events/${eventId}/join`, {
       method: 'POST',
       headers: await authHeaders('U-bob', 'Bob'),
@@ -227,6 +330,17 @@ describe('group members + organizer preselect', () => {
     ).toBe(false);
   });
 
+  it('still creates event when LINE resolve fails but cache has names', async () => {
+    await seedMembers([{ lineUserId: 'U-amy', displayName: 'Amy' }]);
+    const created = await createEvent('U-lee', 'Lee', {
+      name: '離線預選',
+      capacity: 2,
+      preselectedMemberIds: ['U-amy'],
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.event.confirmedCount).toBe(1);
+  });
+
   it('concurrent create with same preselected member does not double-book', async () => {
     await seedMembers([{ lineUserId: 'U-amy', displayName: 'Amy' }]);
     const payload = {
@@ -251,19 +365,14 @@ describe('group members + organizer preselect', () => {
         body: JSON.stringify({ ...payload, name: '競態預選 B' }),
       }),
     ]);
-    const statuses = [a.status, b.status].sort();
-    // Both events can be created; Amy can only be in one due to unique per event.
-    // Concurrent organizers creating separate events both preselecting Amy is fine (different events).
     expect(a.status).toBe(201);
     expect(b.status).toBe(201);
 
-    // Same event duplicate join should fail — second self join on first event.
     const eventId = a.body.event!.eventId;
     const dup = await json(`/api/events/${eventId}/join`, {
       method: 'POST',
       headers: await authHeaders('U-amy', 'Amy'),
     });
     expect(dup.status).toBe(409);
-    void statuses;
   });
 });

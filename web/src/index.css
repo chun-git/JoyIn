@@ -946,10 +946,29 @@ section h2 { margin: 0 0 10px; font-size: 18px; }
 .member-preselect-count {
   margin: 0;
 }
-.member-preselect-error {
+.member-preselect-hint,
+.member-preselect-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.member-preselect-sections {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+.member-preselect-section {
   display: grid;
   gap: 8px;
   min-width: 0;
+}
+.member-preselect-section-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--muted);
 }
 .member-preselect-list {
   list-style: none;

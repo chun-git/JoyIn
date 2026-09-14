@@ -978,3 +978,94 @@ export async function getGroupMembersCacheSyncedAt(
     .first<{ synced_at: string | null }>();
   return row?.synced_at ?? null;
 }
+
+export interface EventParticipantLineRow {
+  line_user_id: string;
+  participant_name: string;
+  status: 'CONFIRMED' | 'WAITLIST';
+  waitlist_position: number | null;
+  created_at: string;
+}
+
+/** Most recently created non-deleted event in the group (by created_at DESC). */
+export async function getLatestGroupEventId(
+  db: D1Database,
+  groupId: string,
+  excludeEventId?: string,
+): Promise<string | null> {
+  const sql = excludeEventId
+    ? `SELECT event_id FROM events
+       WHERE group_id = ? AND status != 'DELETED' AND event_id != ?
+       ORDER BY created_at DESC
+       LIMIT 1`
+    : `SELECT event_id FROM events
+       WHERE group_id = ? AND status != 'DELETED'
+       ORDER BY created_at DESC
+       LIMIT 1`;
+  const row = excludeEventId
+    ? await db.prepare(sql).bind(groupId, excludeEventId).first<{ event_id: string }>()
+    : await db.prepare(sql).bind(groupId).first<{ event_id: string }>();
+  return row?.event_id ?? null;
+}
+
+/**
+ * SELF registrations with a LINE user id (excludes PROXY / cancelled).
+ * Ordered: confirmed by created_at ASC, then waitlist by position/created_at.
+ */
+export async function listEventLineParticipants(
+  db: D1Database,
+  eventId: string,
+): Promise<EventParticipantLineRow[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT
+         COALESCE(NULLIF(participant_line_user_id, ''), line_user_id) AS line_user_id,
+         participant_name,
+         status,
+         waitlist_position,
+         created_at
+       FROM registrations
+       WHERE event_id = ?
+         AND type = 'SELF'
+         AND COALESCE(NULLIF(participant_line_user_id, ''), line_user_id) IS NOT NULL
+         AND TRIM(COALESCE(NULLIF(participant_line_user_id, ''), line_user_id)) != ''
+       ORDER BY
+         CASE status WHEN 'CONFIRMED' THEN 0 ELSE 1 END,
+         CASE status WHEN 'WAITLIST' THEN COALESCE(waitlist_position, 999999) ELSE 0 END,
+         created_at ASC`,
+    )
+    .bind(eventId)
+    .all<EventParticipantLineRow>();
+  return results ?? [];
+}
+
+export async function lookupParticipantNamesByLineIds(
+  db: D1Database,
+  groupId: string,
+  lineUserIds: string[],
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (lineUserIds.length === 0) return map;
+  const placeholders = lineUserIds.map(() => '?').join(', ');
+  const { results } = await db
+    .prepare(
+      `SELECT
+         COALESCE(NULLIF(r.participant_line_user_id, ''), r.line_user_id) AS line_user_id,
+         r.participant_name AS participant_name,
+         r.created_at AS created_at
+       FROM registrations r
+       INNER JOIN events e ON e.event_id = r.event_id
+       WHERE e.group_id = ?
+         AND r.type = 'SELF'
+         AND COALESCE(NULLIF(r.participant_line_user_id, ''), r.line_user_id) IN (${placeholders})
+       ORDER BY r.created_at DESC`,
+    )
+    .bind(groupId, ...lineUserIds)
+    .all<{ line_user_id: string; participant_name: string; created_at: string }>();
+  for (const row of results ?? []) {
+    if (!map.has(row.line_user_id) && row.participant_name?.trim()) {
+      map.set(row.line_user_id, row.participant_name.trim());
+    }
+  }
+  return map;
+}

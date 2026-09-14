@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import type { CreateEventInput, GroupMemberPublic } from '../../../shared/types';
+import type { CreateEventInput, PreselectMemberItem } from '../../../shared/types';
 import { addOneMinute, taipeiParts, validateEventSchedule } from '@shared/datetime';
 import { parseFeeAmount, parseGoogleMapsUrl } from '@shared/event-fields';
 import { MemberPreselectList } from './MemberPreselectList';
@@ -17,12 +17,15 @@ export function EventForm({
   onSubmit: (input: CreateEventInput, confirmTimeLocationChange: boolean) => Promise<void>;
   timeHint?: string;
   memberPreselect?: {
-    members: GroupMemberPublic[];
+    members: PreselectMemberItem[];
+    attendedTitle?: string;
+    waitlistTitle?: string;
     selectedIds: string[];
     onSelectedIdsChange: (ids: string[]) => void;
     loading?: boolean;
-    error?: string;
-    onRetry?: () => void;
+    hint?: string | null;
+    emptyMessage?: string | null;
+    onRefresh?: () => void;
   };
 }) {
   const [name, setName] = useState(initial?.name ?? '');
@@ -96,9 +99,6 @@ export function EventForm({
       return setError(
         `預先報名人數（${preselectedMemberIds.length}）不可超過正式報名上限（${parsedCapacity}）`,
       );
-    }
-    if (memberPreselect?.error) {
-      return setError(memberPreselect.error);
     }
 
     const next: CreateEventInput = {
@@ -284,12 +284,15 @@ export function EventForm({
       {memberPreselect ? (
         <MemberPreselectList
           members={memberPreselect.members}
+          attendedTitle={memberPreselect.attendedTitle}
+          waitlistTitle={memberPreselect.waitlistTitle}
           capacity={capacityForUi}
           selectedIds={memberPreselect.selectedIds}
           onChange={memberPreselect.onSelectedIdsChange}
           loading={memberPreselect.loading}
-          error={memberPreselect.error}
-          onRetry={memberPreselect.onRetry}
+          hint={memberPreselect.hint}
+          emptyMessage={memberPreselect.emptyMessage}
+          onRefresh={memberPreselect.onRefresh}
         />
       ) : null}
       {error ? <p className="error">{error}</p> : null}

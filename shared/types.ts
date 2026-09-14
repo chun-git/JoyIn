@@ -54,6 +54,29 @@ export interface GroupMemberPublic {
   pictureUrl: string | null;
 }
 
+export type PreselectMemberSection = 'attended' | 'waitlist' | 'other';
+
+export interface PreselectMemberItem extends GroupMemberPublic {
+  section: PreselectMemberSection;
+  defaultSelected: boolean;
+}
+
+export interface PreselectMemberRoster {
+  members: PreselectMemberItem[];
+  sections: {
+    attended: PreselectMemberItem[];
+    waitlist: PreselectMemberItem[];
+    other: PreselectMemberItem[];
+  };
+  attendedTitle: string;
+  waitlistTitle: string;
+  defaultSelectedIds: string[];
+  lineSyncStatus: 'ok' | 'failed' | 'skipped' | 'unavailable';
+  hint: string | null;
+  emptyMessage: string | null;
+  syncedAt: string | null;
+}
+
 export interface EventDetail extends EventSummary {
   registrations: {
     confirmed: RegistrationRecord[];
