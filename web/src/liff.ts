@@ -246,6 +246,8 @@ let liffInitGeneration = 0;
 let bootAttemptId = 0;
 /** Latest UI phase listener (StrictMode remount may replace it). */
 let activeOnPhase: PhaseListener | undefined;
+/** In-process guard so double-clicks cannot stack logout/login. */
+let manualLoginInFlight = false;
 
 /** Test helper: reset module singletons between tests. */
 export function resetLiffBootStateForTests(): void {
@@ -256,6 +258,7 @@ export function resetLiffBootStateForTests(): void {
   liffInitGeneration = 0;
   bootAttemptId = 0;
   activeOnPhase = undefined;
+  manualLoginInFlight = false;
 }
 
 /**
@@ -441,6 +444,7 @@ async function runBoot(deps: InitSessionDeps, attempt: number): Promise<LiffBoot
   const isCurrent = () => attempt === bootAttemptId;
 
   const fail = (error: LiffBootError): LiffBootResult => {
+    safeRemoveItem(storage, JOYIN_MANUAL_LOGIN_KEY);
     if (isCurrent()) {
       setPhase(error.phase === 'login_required' ? 'login_required' : 'failed', {
         code: error.code,
@@ -746,50 +750,68 @@ export function assertNoAuthInSessionStorage(storage?: Storage): void {
 }
 
 /**
- * User clicked「重新登入」: preserve context/route, then call liff.login() once.
- * Page-load auto login uses withLoginOnExternalBrowser only (never liff.login).
- * Does not call liff.logout(). Does not clear JoyIn group context.
+ * True when LIFF currently exposes a non-expired 3-part ID Token.
+ * isLoggedIn() alone is not enough — LINE may stay "logged in" with a stale token.
+ */
+export function isCurrentIdTokenUsable(liff: LiffLike, nowMs = Date.now()): boolean {
+  try {
+    const raw = liff.getIDToken();
+    if (raw == null || typeof raw !== 'string' || !raw.trim()) return false;
+    const diag = describeIdTokenSafe(raw.trim());
+    if (diag.partCount !== 3) return false;
+    const decoded = safeGetDecodedIdToken(liff);
+    const expiry = readIdTokenExpiry(decoded, nowUnixSeconds(nowMs));
+    return !expiry.expired;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * User clicked「重新登入 LINE」: preserve context/route, then force a fresh LINE Login.
+ * - isLoggedIn + usable token → soft re-boot (no login/logout)
+ * - isLoggedIn + expired/missing token → logout once, then login once
+ * - not logged in → login once
+ * Never stores ID Token. Never auto-loops.
  */
 export async function startManualLineLogin(deps: InitSessionDeps = {}): Promise<LiffBootResult> {
+  if (manualLoginInFlight) {
+    return { status: 'redirecting', phase: 'redirecting_login' };
+  }
+  manualLoginInFlight = true;
+
   const storage = getSessionStorage(deps.storage);
   const endpointOrigin = deps.endpointOrigin || DEFAULT_ENDPOINT;
   const fetchImpl = deps.fetchImpl ?? fetch;
+  const nowMs = deps.now?.() ?? Date.now();
 
-  preserveJoyInContextBeforeInit({
-    search: deps.locationSearch,
-    storage,
-    nowMs: deps.now?.() ?? Date.now(),
-  });
-  preservePendingRoute(
-    storage,
-    typeof window !== 'undefined' ? window.location.pathname : undefined,
-    deps.locationSearch ?? (typeof window !== 'undefined' ? window.location.search : undefined),
-  );
+  try {
+    preserveJoyInContextBeforeInit({
+      search: deps.locationSearch,
+      storage,
+      nowMs,
+    });
+    preservePendingRoute(
+      storage,
+      typeof window !== 'undefined' ? window.location.pathname : undefined,
+      deps.locationSearch ?? (typeof window !== 'undefined' ? window.location.search : undefined),
+    );
 
-  clearLiffInitFailureCache();
-  sessionBootPromise = null;
-  // Block withLoginOnExternalBrowser so this path uses explicit liff.login() only.
-  safeSetItem(storage, JOYIN_LOGIN_ATTEMPTED_KEY, '1');
-
-  const bootResult = await initSession({
-    ...deps,
-    forceLogin: false,
-    storage,
-  });
-  if (bootResult.status === 'ready') {
+    clearLiffInitFailureCache();
+    sessionBootPromise = null;
+    // Block withLoginOnExternalBrowser so this path uses explicit liff.login() only.
+    safeSetItem(storage, JOYIN_LOGIN_ATTEMPTED_KEY, '1');
     safeRemoveItem(storage, JOYIN_MANUAL_LOGIN_KEY);
-    return bootResult;
-  }
 
-  let liff = cachedLiff ?? deps.liff ?? null;
-  if (!liff) {
-    try {
+    let liff: LiffLike = cachedLiff ?? deps.liff ?? (null as unknown as LiffLike);
+    if (!liff) {
       let liffId = deps.liffId || '';
       if (!liffId) {
         const config = await resolveLiffConfig(fetchImpl);
         liffId = config.liffId;
       }
       if (!liffId) {
+        manualLoginInFlight = false;
         return {
           status: 'failed',
           phase: 'failed',
@@ -805,37 +827,54 @@ export async function startManualLineLogin(deps: InitSessionDeps = {}): Promise<
         timeoutMs: deps.initTimeoutMs ?? LIFF_INIT_TIMEOUT_MS,
         withLoginOnExternalBrowser: false,
       });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'LIFF 初始化失敗';
-      return {
-        status: 'failed',
-        phase: 'failed',
-        error: new LiffBootError('init_error', message, 'failed', true),
-        canRetryLogin: true,
-      };
     }
-  }
 
-  if (safeIsLoggedIn(liff)) {
-    // Rare: logged in after init path failed for another reason — soft retry boot.
-    sessionBootPromise = null;
-    return initSession({ ...deps, forceLogin: false, storage });
-  }
+    const loggedIn = safeIsLoggedIn(liff);
+    const tokenUsable = isCurrentIdTokenUsable(liff, nowMs);
 
-  if (safeGetItem(storage, JOYIN_MANUAL_LOGIN_KEY) === 'pending') {
-    return { status: 'redirecting', phase: 'redirecting_login' };
-  }
+    // Already have a fresh ID Token — just rebuild the session (no logout/login).
+    if (loggedIn && tokenUsable) {
+      sessionBootPromise = null;
+      const bootResult = await initSession({ ...deps, forceLogin: false, storage });
+      if (bootResult.status === 'ready') {
+        safeRemoveItem(storage, JOYIN_MANUAL_LOGIN_KEY);
+        manualLoginInFlight = false;
+        return bootResult;
+      }
+      // Soft boot still failed despite a usable token — fall through to forced re-login.
+    }
 
-  safeSetItem(storage, JOYIN_MANUAL_LOGIN_KEY, 'pending');
-  if (deps.onPhase) deps.onPhase('redirecting_login');
+    if (deps.onPhase) deps.onPhase('redirecting_login');
+    safeSetItem(storage, JOYIN_MANUAL_LOGIN_KEY, 'pending');
 
-  try {
     const href =
       deps.locationHref ||
       (typeof window !== 'undefined' ? window.location.href : `${endpointOrigin}/`);
     const redirectUri = assertEndpointRedirectUri(buildLiffLoginRedirectUri(href), endpointOrigin);
+
+    // Logged in with expired/invalid token: logout once so login() actually redirects.
+    if (loggedIn && typeof liff.logout === 'function') {
+      try {
+        liff.logout();
+      } catch (err) {
+        manualLoginInFlight = false;
+        safeRemoveItem(storage, JOYIN_MANUAL_LOGIN_KEY);
+        const message = err instanceof Error ? err.message : '無法登出過期登入狀態';
+        return {
+          status: 'failed',
+          phase: 'failed',
+          error: new LiffBootError('login_redirect_failed', message, 'failed', true, false),
+          canRetryLogin: true,
+          canCloseWindow: false,
+        };
+      }
+    }
+
     liff.login({ redirectUri });
+    // Page navigates away — leave inFlight true until full reload resets module state.
+    return { status: 'redirecting', phase: 'redirecting_login' };
   } catch (err) {
+    manualLoginInFlight = false;
     safeRemoveItem(storage, JOYIN_MANUAL_LOGIN_KEY);
     const message = err instanceof Error ? err.message : '無法前往 LINE 登入';
     return {
@@ -846,6 +885,4 @@ export async function startManualLineLogin(deps: InitSessionDeps = {}): Promise<
       canCloseWindow: false,
     };
   }
-
-  return { status: 'redirecting', phase: 'redirecting_login' };
 }

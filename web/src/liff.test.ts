@@ -6,6 +6,7 @@ import {
   initLiffSingleton,
   initSession,
   JOYIN_LOGIN_ATTEMPTED_KEY,
+  JOYIN_MANUAL_LOGIN_KEY,
   LiffBootError,
   resetLiffBootStateForTests,
   retryInitSession,
@@ -387,7 +388,34 @@ describe('initSession boot flow', () => {
     expect(storage.getItem(JOYIN_CONTEXT_STORAGE_KEY)).toBe(CONTEXT);
   });
 
-  it('manual 重新登入 skips liff.login when already logged in', async () => {
+  it('manual 重新登入 with expired token logs out once then login once', async () => {
+    storage.setItem(JOYIN_LOGIN_ATTEMPTED_KEY, '1');
+    storage.setItem(JOYIN_CONTEXT_STORAGE_KEY, CONTEXT);
+    storage.setItem(JOYIN_PENDING_ROUTE_KEY, '/events');
+    const now = Math.floor(Date.now() / 1000);
+    const liff = mockLiff({
+      isLoggedIn: () => true,
+      isInClient: () => true,
+      getDecodedIDToken: () => ({ iat: now - 10_000, exp: now - 5 }),
+    });
+    const result = await startManualLineLogin({
+      allowDev: false,
+      liff,
+      liffId: 'liff-id',
+      endpointOrigin: 'https://joyin-web.pages.dev',
+      storage,
+      locationHref: 'https://joyin-web.pages.dev/events',
+    });
+    expect(result.status).toBe('redirecting');
+    expect(liff.logout).toHaveBeenCalledTimes(1);
+    expect(liff.login).toHaveBeenCalledTimes(1);
+    expect(liff.login).toHaveBeenCalledWith({
+      redirectUri: 'https://joyin-web.pages.dev/',
+    });
+    expect(storage.getItem(JOYIN_CONTEXT_STORAGE_KEY)).toBe(CONTEXT);
+  });
+
+  it('manual 重新登入 skips logout/login when token is still usable', async () => {
     storage.setItem(JOYIN_LOGIN_ATTEMPTED_KEY, '1');
     storage.setItem(JOYIN_CONTEXT_STORAGE_KEY, CONTEXT);
     const liff = mockLiff({
@@ -405,6 +433,61 @@ describe('initSession boot flow', () => {
     expect(liff.login).not.toHaveBeenCalled();
     expect(liff.logout).not.toHaveBeenCalled();
     expect(storage.getItem(JOYIN_CONTEXT_STORAGE_KEY)).toBe(CONTEXT);
+  });
+
+  it('double-click manual login only runs logout/login once', async () => {
+    storage.setItem(JOYIN_CONTEXT_STORAGE_KEY, CONTEXT);
+    const now = Math.floor(Date.now() / 1000);
+    const liff = mockLiff({
+      isLoggedIn: () => true,
+      getDecodedIDToken: () => ({ iat: now - 10_000, exp: now - 5 }),
+    });
+    const first = startManualLineLogin({
+      allowDev: false,
+      liff,
+      liffId: 'liff-id',
+      endpointOrigin: 'https://joyin-web.pages.dev',
+      storage,
+      locationHref: 'https://joyin-web.pages.dev/events',
+    });
+    const second = startManualLineLogin({
+      allowDev: false,
+      liff,
+      liffId: 'liff-id',
+      endpointOrigin: 'https://joyin-web.pages.dev',
+      storage,
+      locationHref: 'https://joyin-web.pages.dev/events',
+    });
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.status).toBe('redirecting');
+    expect(b.status).toBe('redirecting');
+    expect(liff.logout).toHaveBeenCalledTimes(1);
+    expect(liff.login).toHaveBeenCalledTimes(1);
+  });
+
+  it('failed OAuth callback clears manual pending so user can retry without a loop', async () => {
+    storage.setItem(JOYIN_CONTEXT_STORAGE_KEY, CONTEXT);
+    storage.setItem(JOYIN_MANUAL_LOGIN_KEY, 'pending');
+    storage.setItem(JOYIN_LOGIN_ATTEMPTED_KEY, '1');
+    const now = Math.floor(Date.now() / 1000);
+    const liff = mockLiff({
+      isLoggedIn: () => true,
+      isInClient: () => true,
+      getDecodedIDToken: () => ({ iat: now - 10_000, exp: now - 5 }),
+    });
+    const result = await initSession({
+      allowDev: false,
+      liff,
+      liffId: 'liff-id',
+      endpointOrigin: 'https://joyin-web.pages.dev',
+      storage,
+      locationSearch: `?context=${CONTEXT}`,
+    });
+    expect(result.status).toBe('failed');
+    expect(result.error?.code).toBe('auth_token_expired');
+    expect(storage.getItem(JOYIN_MANUAL_LOGIN_KEY)).toBeNull();
+    expect(liff.login).not.toHaveBeenCalled();
+    expect(liff.logout).not.toHaveBeenCalled();
   });
 
   it('retry after init timeout can call liff.init again and keeps group context', async () => {
