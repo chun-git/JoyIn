@@ -2,14 +2,19 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate, Link } from 'react-router-dom';
 import { StateBlock } from './components/StateBlock';
 import { SiteNav } from './components/SiteNav';
-import { AuthExpiredPanel } from './components/AuthExpiredPanel';
-import { AUTH_EXPIRED_BODY, AUTH_EXTERNAL_BROWSER_MESSAGE } from './auth-recovery-keys';
+import { AuthExpiredPanel, LoginFailedPanel } from './components/AuthExpiredPanel';
+import {
+  AUTH_EXPIRED_BODY,
+  AUTH_LOGIN_FAILED_BODY,
+  AUTH_REDIRECTING_LOGIN,
+} from './auth-recovery-keys';
 import { closeLiffWindowIfInClient } from './auth-recovery';
 import {
   CONTEXT_MISSING_MESSAGE,
   getCachedLiff,
   initSession,
   retryInitSession,
+  startManualLineLogin,
   type JoyInFlowPhase,
   type LiffBootResult,
   type LiffSession,
@@ -35,7 +40,7 @@ function phaseLabel(phase: JoyInFlowPhase): string {
     case 'login_required':
       return '需要登入 LINE';
     case 'redirecting_login':
-      return '正在前往 LINE 登入…';
+      return AUTH_REDIRECTING_LOGIN;
     case 'retrieving_id_token':
       return '正在確認登入身分…';
     case 'loading_events':
@@ -55,9 +60,10 @@ function isExpiredAuthError(code?: string, message?: string): boolean {
   return text.includes(AUTH_EXPIRED_BODY) || text.includes('登入狀態已失效');
 }
 
-function isExternalBrowserError(code?: string, message?: string): boolean {
-  if (code === 'external_browser_required') return true;
-  return (message || '').includes(AUTH_EXTERNAL_BROWSER_MESSAGE);
+function isLoginFailedError(code?: string, message?: string): boolean {
+  if (code === 'login_required' || code === 'login_redirect_failed') return true;
+  const text = message || '';
+  return text.includes(AUTH_LOGIN_FAILED_BODY);
 }
 
 function GroupGate({
@@ -72,7 +78,6 @@ function GroupGate({
       <div className="stack">
         <SiteNav current="events" />
         <StateBlock kind="error" title={CONTEXT_MISSING_MESSAGE}>
-          活動屬於群組。請在群組輸入 /list，再從活動卡片開啟 JoyIn。
           <div className="row" style={{ marginTop: 12, justifyContent: 'center' }}>
             <Link to="/help" className="btn secondary">
               查看使用手冊
@@ -113,21 +118,19 @@ function LiffApp() {
         const pending = sanitizeJoyInRoute(result.pendingRoute || '');
         if (pending && !restoredRouteRef.current) {
           restoredRouteRef.current = true;
-          const current = `${location.pathname}${location.search}`.split('?')[0];
-          if (pending !== current && pending !== location.pathname) {
+          if (pending !== location.pathname) {
             navigate(pending, { replace: true });
           }
         }
         return;
       }
       if (result.status === 'redirecting') {
-        // Legacy path — should not occur without manual liff.login().
         setSession(null);
         setBootError('');
         setBootErrorCode('');
         setCanRetry(false);
         setCanCloseWindow(false);
-        setBooting(false);
+        setBooting(true);
         setPhase('redirecting_login');
         return;
       }
@@ -138,24 +141,29 @@ function LiffApp() {
       setCanCloseWindow(Boolean(result.canCloseWindow));
       setBooting(false);
     },
-    [location.pathname, location.search, navigate],
+    [location.pathname, navigate],
   );
 
   const boot = useCallback(
-    (mode: 'auto' | 'retry' = 'auto') => {
+    (mode: 'auto' | 'retry' | 'manual-login' = 'auto') => {
       const gen = ++bootGenRef.current;
       setBooting(true);
       setBootError('');
       setBootErrorCode('');
       setCanRetry(false);
       setCanCloseWindow(false);
-      setPhase('preserving_context');
+      setPhase(mode === 'manual-login' ? 'redirecting_login' : 'preserving_context');
 
       const onPhase = (next: JoyInFlowPhase) => {
         if (gen !== bootGenRef.current) return;
         setPhase(next);
       };
-      const run = mode === 'retry' ? retryInitSession({ onPhase }) : initSession({ onPhase });
+      const run =
+        mode === 'manual-login'
+          ? startManualLineLogin({ onPhase })
+          : mode === 'retry'
+            ? retryInitSession({ onPhase })
+            : initSession({ onPhase });
 
       run
         .then((result) => applyResult(result, gen))
@@ -180,43 +188,45 @@ function LiffApp() {
     if (isExpiredAuthError(bootErrorCode, bootError)) {
       return (
         <div className="app-shell">
-          <AuthExpiredPanel inClient={canCloseWindow} kind="expired" />
+          <AuthExpiredPanel inClient={canCloseWindow} />
         </div>
       );
     }
-    if (isExternalBrowserError(bootErrorCode, bootError)) {
+    if (isLoginFailedError(bootErrorCode, bootError)) {
       return (
         <div className="app-shell">
-          <AuthExpiredPanel inClient={false} kind="external" />
+          <LoginFailedPanel onRetryLogin={() => boot('manual-login')} />
         </div>
       );
     }
     return (
       <div className="app-shell">
-        <StateBlock kind="error" title={phaseLabel(phase === 'login_required' ? 'login_required' : 'failed')}>
-          {bootError}
-          <div className="row" style={{ marginTop: 12, justifyContent: 'center' }}>
-            {canCloseWindow ? (
-              <button
-                className="btn"
-                type="button"
-                onClick={() => {
-                  closeLiffWindowIfInClient(getCachedLiff());
-                }}
-              >
-                關閉頁面
-              </button>
-            ) : null}
-            {canRetry ? (
-              <button className="btn secondary" type="button" onClick={() => boot('retry')}>
-                重試
-              </button>
-            ) : null}
-            <Link to="/help" className="btn secondary">
-              查看使用手冊
-            </Link>
-          </div>
-        </StateBlock>
+        <div className="auth-panel">
+          <StateBlock kind="error" title={phaseLabel(phase === 'login_required' ? 'login_required' : 'failed')}>
+            {bootError}
+            <div className="row" style={{ marginTop: 12, justifyContent: 'center' }}>
+              {canCloseWindow ? (
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() => {
+                    closeLiffWindowIfInClient(getCachedLiff());
+                  }}
+                >
+                  關閉頁面
+                </button>
+              ) : null}
+              {canRetry ? (
+                <button className="btn secondary" type="button" onClick={() => boot('retry')}>
+                  重試
+                </button>
+              ) : null}
+              <Link to="/help" className="btn secondary">
+                查看使用手冊
+              </Link>
+            </div>
+          </StateBlock>
+        </div>
       </div>
     );
   }
@@ -224,7 +234,18 @@ function LiffApp() {
   if (booting || !session) {
     return (
       <div className="app-shell">
-        <StateBlock kind="loading" title={phaseLabel(phase === 'idle' ? 'initializing_liff' : phase)} />
+        <div className="auth-panel">
+          <StateBlock
+            kind="loading"
+            title={phaseLabel(
+              phase === 'idle'
+                ? 'initializing_liff'
+                : phase === 'redirecting_login'
+                  ? 'redirecting_login'
+                  : phase,
+            )}
+          />
+        </div>
       </div>
     );
   }
@@ -233,10 +254,7 @@ function LiffApp() {
     <div className="app-shell">
       <Routes>
         <Route path="/transfer/:token" element={<TransferInvitePage session={session} />} />
-        <Route
-          path="/"
-          element={<Navigate to="/events" replace />}
-        />
+        <Route path="/" element={<Navigate to="/events" replace />} />
         <Route
           path="/events"
           element={

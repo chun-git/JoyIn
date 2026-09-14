@@ -1,8 +1,8 @@
 import {
   AUTH_EXPIRED_BODY,
-  AUTH_EXTERNAL_BROWSER_MESSAGE,
+  AUTH_LOGIN_FAILED_BODY,
 } from './auth-recovery-keys';
-import { buildContextDiag, getJoyInContextToken, preserveJoyInContextBeforeInit, type JoyInContextSource } from './liff-context';
+import { buildContextDiag, buildLiffLoginRedirectUri, getJoyInContextToken, preserveJoyInContextBeforeInit, type JoyInContextSource } from './liff-context';
 import { describeIdTokenSafe, requireLiffIdToken } from './auth-token';
 import { nowUnixSeconds, readIdTokenExpiry, type DecodedIdTokenClaims } from './id-token-expiry';
 import {
@@ -20,7 +20,7 @@ import {
 export type { JoyInContextSource, JoyInFlowPhase, SafeLiffDiag };
 export { CONTEXT_MISSING_MESSAGE, CONTEXT_INVALID_MESSAGE, buildLiffLoginRedirectUri } from './liff-context';
 export { detectOs, logSafeDiag } from './liff-diag';
-export { AUTH_EXPIRED_BODY, AUTH_EXPIRED_TITLE, AUTH_EXTERNAL_BROWSER_MESSAGE } from './auth-recovery-keys';
+export { AUTH_EXPIRED_BODY, AUTH_EXPIRED_TITLE, AUTH_EXTERNAL_BROWSER_MESSAGE, AUTH_LOGIN_FAILED_BODY, AUTH_LOGIN_FAILED_TITLE, AUTH_REDIRECTING_LOGIN } from './auth-recovery-keys';
 
 export interface LiffSession {
   lineUserId: string;
@@ -52,6 +52,12 @@ export const LIFF_INIT_TIMEOUT_MS = 10_000;
  * Prevents infinite external-browser redirect loops when login is cancelled.
  */
 export const JOYIN_LOGIN_ATTEMPTED_KEY = 'joyin_liff_login_attempted';
+
+/**
+ * sessionStorage: user clicked「重新登入」and we called liff.login() once.
+ * Prevents repeated manual login redirects in the same tab session.
+ */
+export const JOYIN_MANUAL_LOGIN_KEY = 'joyin_liff_manual_login';
 
 export type LiffBootStatus = 'ready' | 'redirecting' | 'failed';
 export class LiffBootError extends Error {
@@ -110,6 +116,8 @@ export interface InitSessionDeps {
   locationSearch?: string;
   historyReplaceState?: (data: unknown, unused: string, url?: string | null) => void;
   endpointOrigin?: string;
+  /** Full href for building a safe liff.login redirectUri (Pages origin only). */
+  locationHref?: string;
   onPhase?: PhaseListener;
   /** Clear one-shot external auto-login flag and retry init (no manual liff.login). */
   forceLogin?: boolean;
@@ -502,10 +510,13 @@ async function runBoot(deps: InitSessionDeps, attempt: number): Promise<LiffBoot
       );
     }
 
-    // ——— 3. Singleton init (external login only via withLoginOnExternalBrowser, at most once) ———
-    if (isCurrent()) setPhase('initializing_liff');
+    // ——— 3. Singleton init (withLoginOnExternalBrowser on first external attempt only) ———
     const alreadyAttemptedExternal = Boolean(safeGetItem(storage, JOYIN_LOGIN_ATTEMPTED_KEY));
     const allowExternalAutoLogin = deps.forceLogin || !alreadyAttemptedExternal;
+    if (isCurrent()) {
+      // First external attempt: LIFF may redirect during init — show login redirect copy.
+      setPhase(allowExternalAutoLogin ? 'redirecting_login' : 'initializing_liff');
+    }
     if (allowExternalAutoLogin) {
       // Mark before init so a cancelled OAuth return does not redirect forever.
       safeSetItem(storage, JOYIN_LOGIN_ATTEMPTED_KEY, '1');
@@ -546,8 +557,12 @@ async function runBoot(deps: InitSessionDeps, attempt: number): Promise<LiffBoot
     const inClient = safeIsInClient(liff);
     const loggedIn = safeIsLoggedIn(liff);
 
-    // ——— 4. Not logged in: never call logout/login; stop cleanly ———
+    // ——— 4. Not logged in ———
+    // LIFF Browser: show expired close-page UI (never auto login/logout).
+    // External browser: withLoginOnExternalBrowser should have redirected on first attempt;
+    // if we are still here, show recoverable login failure (not「請使用 LINE 開啟」).
     if (!loggedIn) {
+      safeRemoveItem(storage, JOYIN_MANUAL_LOGIN_KEY);
       setPhase('login_required');
       if (inClient) {
         return fail(
@@ -562,10 +577,10 @@ async function runBoot(deps: InitSessionDeps, attempt: number): Promise<LiffBoot
       }
       return fail(
         new LiffBootError(
-          'external_browser_required',
-          AUTH_EXTERNAL_BROWSER_MESSAGE,
           'login_required',
-          false,
+          AUTH_LOGIN_FAILED_BODY,
+          'login_required',
+          true,
           false,
         ),
       );
@@ -644,9 +659,9 @@ async function runBoot(deps: InitSessionDeps, attempt: number): Promise<LiffBoot
       return fail(
         new LiffBootError(
           'auth_token_invalid',
-          inClient ? AUTH_EXPIRED_BODY : AUTH_EXTERNAL_BROWSER_MESSAGE,
+          inClient ? AUTH_EXPIRED_BODY : AUTH_LOGIN_FAILED_BODY,
           'failed',
-          false,
+          !inClient,
           inClient,
         ),
       );
@@ -687,6 +702,7 @@ async function runBoot(deps: InitSessionDeps, attempt: number): Promise<LiffBoot
     };
 
     setPhase('ready');
+    safeRemoveItem(storage, JOYIN_MANUAL_LOGIN_KEY);
     logSafeDiag({
       event: 'boot_ready',
       phase: 'ready',
@@ -730,12 +746,106 @@ export function assertNoAuthInSessionStorage(storage?: Storage): void {
 }
 
 /**
- * Allow one more withLoginOnExternalBrowser attempt (clears one-shot flag).
- * Never calls liff.login() / liff.logout(). Does not clear JoyIn group context.
+ * User clicked「重新登入」: preserve context/route, then call liff.login() once.
+ * Page-load auto login uses withLoginOnExternalBrowser only (never liff.login).
+ * Does not call liff.logout(). Does not clear JoyIn group context.
  */
-export function startManualLineLogin(deps: InitSessionDeps = {}): Promise<LiffBootResult> {
+export async function startManualLineLogin(deps: InitSessionDeps = {}): Promise<LiffBootResult> {
   const storage = getSessionStorage(deps.storage);
+  const endpointOrigin = deps.endpointOrigin || DEFAULT_ENDPOINT;
+  const fetchImpl = deps.fetchImpl ?? fetch;
+
+  preserveJoyInContextBeforeInit({
+    search: deps.locationSearch,
+    storage,
+    nowMs: deps.now?.() ?? Date.now(),
+  });
+  preservePendingRoute(
+    storage,
+    typeof window !== 'undefined' ? window.location.pathname : undefined,
+    deps.locationSearch ?? (typeof window !== 'undefined' ? window.location.search : undefined),
+  );
+
   clearLiffInitFailureCache();
-  safeRemoveItem(storage, JOYIN_LOGIN_ATTEMPTED_KEY);
-  return initSession({ ...deps, forceLogin: true });
+  sessionBootPromise = null;
+  // Block withLoginOnExternalBrowser so this path uses explicit liff.login() only.
+  safeSetItem(storage, JOYIN_LOGIN_ATTEMPTED_KEY, '1');
+
+  const bootResult = await initSession({
+    ...deps,
+    forceLogin: false,
+    storage,
+  });
+  if (bootResult.status === 'ready') {
+    safeRemoveItem(storage, JOYIN_MANUAL_LOGIN_KEY);
+    return bootResult;
+  }
+
+  let liff = cachedLiff ?? deps.liff ?? null;
+  if (!liff) {
+    try {
+      let liffId = deps.liffId || '';
+      if (!liffId) {
+        const config = await resolveLiffConfig(fetchImpl);
+        liffId = config.liffId;
+      }
+      if (!liffId) {
+        return {
+          status: 'failed',
+          phase: 'failed',
+          error: new LiffBootError('liff_id_missing', '尚未設定 LIFF ID', 'failed', true),
+          canRetryLogin: true,
+        };
+      }
+      const mod = deps.importLiff
+        ? await deps.importLiff()
+        : ((await import('@line/liff')) as unknown as LiffModule);
+      liff = mod.default;
+      await initLiffSingleton(liff, liffId, {
+        timeoutMs: deps.initTimeoutMs ?? LIFF_INIT_TIMEOUT_MS,
+        withLoginOnExternalBrowser: false,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'LIFF 初始化失敗';
+      return {
+        status: 'failed',
+        phase: 'failed',
+        error: new LiffBootError('init_error', message, 'failed', true),
+        canRetryLogin: true,
+      };
+    }
+  }
+
+  if (safeIsLoggedIn(liff)) {
+    // Rare: logged in after init path failed for another reason — soft retry boot.
+    sessionBootPromise = null;
+    return initSession({ ...deps, forceLogin: false, storage });
+  }
+
+  if (safeGetItem(storage, JOYIN_MANUAL_LOGIN_KEY) === 'pending') {
+    return { status: 'redirecting', phase: 'redirecting_login' };
+  }
+
+  safeSetItem(storage, JOYIN_MANUAL_LOGIN_KEY, 'pending');
+  if (deps.onPhase) deps.onPhase('redirecting_login');
+
+  try {
+    const href =
+      deps.locationHref ||
+      (typeof window !== 'undefined' ? window.location.href : `${endpointOrigin}/`);
+    const redirectUri = assertEndpointRedirectUri(buildLiffLoginRedirectUri(href), endpointOrigin);
+    liff.login({ redirectUri });
+  } catch (err) {
+    safeRemoveItem(storage, JOYIN_MANUAL_LOGIN_KEY);
+    const message = err instanceof Error ? err.message : '無法前往 LINE 登入';
+    return {
+      status: 'failed',
+      phase: 'failed',
+      error: new LiffBootError('login_redirect_failed', message, 'failed', true, false),
+      canRetryLogin: true,
+      canCloseWindow: false,
+    };
+  }
+
+  return { status: 'redirecting', phase: 'redirecting_login' };
 }

@@ -58,6 +58,13 @@ h1, h2, h3, p, li, label, .hint, .meta, .brand {
   padding: 16px 16px 40px;
 }
 
+.auth-panel {
+  width: 100%;
+  max-width: 420px;
+  min-width: 0;
+  margin: 48px auto 0;
+}
+
 .stack,
 .panel,
 .event-form,
@@ -791,5 +798,26 @@ section h2 { margin: 0 0 10px; font-size: 18px; }
   }
   .help-toc-list {
     display: grid;
+  }
+}
+
+@media (min-width: 768px) {
+  .app-shell {
+    max-width: 680px;
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .app-shell {
+    max-width: 720px;
+    padding-top: 36px;
+  }
+}
+
+@media (min-width: 1440px) {
+  .app-shell {
+    max-width: 760px;
   }
 }
