@@ -52,7 +52,7 @@ describe('App LIFF boot loading states', () => {
     expect(screen.queryByText('正在連接 LINE…')).not.toBeInTheDocument();
   });
 
-  it('shows expired panel without 重新登入 when auth_token_expired in LIFF Browser', async () => {
+  it('shows expired panel with 重新登入 LINE when auth_token_expired', async () => {
     initSession.mockResolvedValue({
       status: 'failed',
       phase: 'failed',
@@ -70,7 +70,8 @@ describe('App LIFF boot loading states', () => {
     expect(await screen.findByText(AUTH_EXPIRED_TITLE)).toBeInTheDocument();
     expect(screen.getByText(AUTH_EXPIRED_BODY)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '關閉頁面' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '重新登入' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重新登入 LINE' })).toBeInTheDocument();
+    expect(screen.queryByText(/重新輸入 \/list/)).not.toBeInTheDocument();
     expect(screen.queryByText('正在連接 LINE…')).not.toBeInTheDocument();
   });
 
@@ -90,11 +91,11 @@ describe('App LIFF boot loading states', () => {
 
     expect(await screen.findByText(AUTH_LOGIN_FAILED_TITLE)).toBeInTheDocument();
     expect(screen.getByText(AUTH_LOGIN_FAILED_BODY)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '重新登入' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重新登入 LINE' })).toBeInTheDocument();
     expect(screen.queryByText(AUTH_EXTERNAL_BROWSER_MESSAGE)).not.toBeInTheDocument();
   });
 
-  it('重新登入 triggers startManualLineLogin and shows redirecting copy', async () => {
+  it('重新登入 LINE triggers startManualLineLogin and shows redirecting copy', async () => {
     const user = (await import('@testing-library/user-event')).default.setup();
     initSession.mockResolvedValue({
       status: 'failed',
@@ -113,7 +114,7 @@ describe('App LIFF boot loading states', () => {
       </MemoryRouter>,
     );
 
-    await user.click(await screen.findByRole('button', { name: '重新登入' }));
+    await user.click(await screen.findByRole('button', { name: '重新登入 LINE' }));
     await waitFor(() => {
       expect(startManualLineLogin).toHaveBeenCalled();
     });

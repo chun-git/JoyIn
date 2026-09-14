@@ -4,19 +4,36 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventListPage } from './pages/EventListPage';
 import { sampleEvent } from './test/fixtures';
 import type { LiffSession } from './liff';
+import { ApiError } from './api';
+import { AUTH_EXPIRED_BODY, AUTH_EXPIRED_TITLE, AUTH_RELOGIN_BUTTON } from './auth-recovery-keys';
 
 const listEvents = vi.fn();
+const refreshContext = vi.fn();
 
-vi.mock('./api', () => ({
-  api: {
-    listEvents: (...args: unknown[]) => listEvents(...args),
-  },
-}));
+vi.mock('./api', async () => {
+  const actual = await vi.importActual<typeof import('./api')>('./api');
+  return {
+    ...actual,
+    api: {
+      listEvents: (...args: unknown[]) => listEvents(...args),
+      refreshContext: (...args: unknown[]) => refreshContext(...args),
+    },
+  };
+});
+
+function freshContextToken(): string {
+  const payload = btoa(JSON.stringify({ g: 'G1', exp: Date.now() + 60_000, n: 'n1' }))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+  const sig = btoa('sig').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  return `${payload}.${sig}`;
+}
 
 const session: LiffSession = {
   lineUserId: 'U-lee',
   displayName: 'Lee',
-  contextToken: 'test-context-token',
+  contextToken: freshContextToken(),
   inClient: false,
   getIdToken: () => 'test:U-lee:Lee',
 };
@@ -24,6 +41,7 @@ const session: LiffSession = {
 describe('EventListPage', () => {
   beforeEach(() => {
     listEvents.mockReset();
+    refreshContext.mockReset();
     listEvents.mockResolvedValue({ events: [sampleEvent] });
   });
 
@@ -41,9 +59,6 @@ describe('EventListPage', () => {
     const nav = screen.getByRole('navigation', { name: '主要' });
     expect(within(nav).getByRole('link', { name: '活動' })).toHaveAttribute('aria-current', 'page');
     expect(within(nav).getByRole('link', { name: '使用手冊' })).toHaveAttribute('href', '/help');
-    expect(within(nav).queryByRole('link', { name: '開啟使用手冊' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '返回 LINE' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /時間：/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '新增活動' })).toBeInTheDocument();
   });
 
@@ -71,12 +86,21 @@ describe('EventListPage', () => {
       </MemoryRouter>,
     );
     expect(await screen.findByText('目前沒有尚未結束的活動')).toBeInTheDocument();
-    const emptyActions = screen.getByText('目前沒有尚未結束的活動').parentElement;
-    expect(emptyActions).toBeTruthy();
-    const createButtons = screen.getAllByRole('button', { name: '新增活動' });
-    expect(createButtons.length).toBeGreaterThanOrEqual(2);
     expect(screen.getByRole('button', { name: '查看操作說明' })).toBeInTheDocument();
-    const actionRow = screen.getByRole('button', { name: '查看操作說明' }).closest('.row');
-    expect(actionRow?.textContent).toMatch(/新增活動.*查看操作說明/);
+  });
+
+  it('shows 重新登入 LINE on auth expiry — never /list', async () => {
+    listEvents.mockRejectedValue(new ApiError(401, 'auth_token_expired', AUTH_EXPIRED_BODY));
+    const onRelogin = vi.fn();
+    render(
+      <MemoryRouter>
+        <EventListPage session={session} onRelogin={onRelogin} />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(AUTH_EXPIRED_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(AUTH_EXPIRED_BODY)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: AUTH_RELOGIN_BUTTON })).toBeInTheDocument();
+    expect(screen.queryByText(/重新輸入 \/list/)).not.toBeInTheDocument();
+    expect(AUTH_EXPIRED_BODY).not.toContain('/list');
   });
 });

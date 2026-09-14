@@ -1,20 +1,13 @@
-import { describe, expect, it } from 'vitest';
-import {
-  AUTH_EXPIRED_BODY,
-  AUTH_EXTERNAL_BROWSER_MESSAGE,
-  AUTH_LOGIN_FAILED_BODY,
-  AUTH_LOGIN_FAILED_TITLE,
-} from './auth-recovery-keys';
+import { describe, expect, it, vi } from 'vitest';
+import { AUTH_EXPIRED_BODY, AUTH_EXTERNAL_BROWSER_MESSAGE, AUTH_LOGIN_FAILED_BODY, AUTH_LOGIN_FAILED_TITLE } from './auth-recovery-keys';
 import { closeLiffWindowIfInClient } from './auth-recovery';
-import { vi } from 'vitest';
 
-describe('auth recovery (external browser allowed)', () => {
-  it('exposes LIFF Browser expired copy and external login failure copy', () => {
-    expect(AUTH_EXPIRED_BODY).toContain('從群組最新的 /list 卡片重新開啟');
-    expect(AUTH_EXPIRED_BODY).not.toContain('系統將重新登入');
+describe('auth recovery (auth vs context copy)', () => {
+  it('auth expired copy never asks for /list', () => {
+    expect(AUTH_EXPIRED_BODY).toBe('請重新登入 LINE 後繼續查看活動。');
+    expect(AUTH_EXPIRED_BODY).not.toContain('/list');
     expect(AUTH_LOGIN_FAILED_TITLE).toBe('無法登入 LINE');
     expect(AUTH_LOGIN_FAILED_BODY).toContain('請重新登入');
-    // Legacy string must not be used as the external-browser gate anymore.
     expect(AUTH_EXTERNAL_BROWSER_MESSAGE).toBe('請使用 LINE 開啟 JoyIn');
   });
 

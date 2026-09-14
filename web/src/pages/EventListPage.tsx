@@ -1,20 +1,29 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type { EventSummary } from '../../../shared/types';
-import { api, ApiError } from '../api';
+import {
+  CONTEXT_EXPIRED_BODY,
+  CONTEXT_EXPIRED_TITLE,
+  CONTEXT_MISSING_BODY,
+  CONTEXT_MISSING_TITLE,
+  SERVER_ERROR_TITLE,
+} from '../auth-recovery-keys';
 import { AuthExpiredPanel } from '../components/AuthExpiredPanel';
 import { EventCard } from '../components/EventCard';
 import { StateBlock } from '../components/StateBlock';
 import { SiteNav } from '../components/SiteNav';
-import { CONTEXT_INVALID_MESSAGE, CONTEXT_MISSING_MESSAGE } from '../liff-context';
+import { bootEventListPage } from '../event-list-boot';
 import type { JoyInFlowPhase, LiffSession } from '../liff';
 
 export function EventListPage({
   session,
   onFlowPhase,
+  onRelogin,
 }: {
   session: LiffSession;
   onFlowPhase?: (phase: JoyInFlowPhase) => void;
+  /** Parent-wired one-shot LINE re-login (preserves context + /events). */
+  onRelogin?: () => void;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -22,89 +31,75 @@ export function EventListPage({
   const showDiag = searchParams.get('diag') === '1';
   const [events, setEvents] = useState<EventSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [errorTitle, setErrorTitle] = useState('無法載入活動');
+  const [errorKind, setErrorKind] = useState<
+    '' | 'auth' | 'context_missing' | 'context_invalid' | 'server' | 'error'
+  >('');
+  const [errorTitle, setErrorTitle] = useState('');
+  const [errorBody, setErrorBody] = useState('');
   const [listStatus, setListStatus] = useState<number | null>(null);
   const [toast] = useState(() => {
     const state = location.state as { listToast?: string } | null;
     return typeof state?.listToast === 'string' ? state.listToast : '';
   });
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (!toast) return;
-    // One-shot: clear history state so refresh does not repeat the toast.
     navigate('/events', { replace: true, state: null });
   }, [toast, navigate]);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     let cancelled = false;
     setLoading(true);
-    setError('');
-    setErrorTitle('無法載入活動');
+    setErrorKind('');
+    setErrorTitle('');
+    setErrorBody('');
     setListStatus(null);
     onFlowPhase?.('loading_events');
-    api
-      .listEvents(session)
-      .then((result) => {
-        if (!cancelled) {
-          setEvents(Array.isArray(result.events) ? result.events : []);
-          setListStatus(200);
-          onFlowPhase?.('ready');
-        }
-      })
-      .catch((err: Error) => {
-        if (!cancelled) {
-          onFlowPhase?.('failed');
-          const status =
-            err instanceof ApiError
-              ? err.status
-              : 'status' in err && typeof (err as { status?: number }).status === 'number'
-                ? (err as { status: number }).status
-                : null;
-          setListStatus(status);
-          if (status === 401) {
-            const code = err instanceof ApiError ? err.code : '';
-            const apiMessage = err instanceof ApiError ? err.message : err.message;
-            if (code.startsWith('context_')) {
-              setErrorTitle(code === 'context_missing' ? CONTEXT_MISSING_MESSAGE : CONTEXT_INVALID_MESSAGE);
-              setError(
-                code === 'context_missing'
-                  ? apiMessage
-                  : `群組連結驗證失敗（${code}）。請回到 LINE 群組重新輸入 /list，並從新的活動卡片開啟。`,
-              );
-            } else if (code === 'auth_token_expired') {
-              setErrorTitle('LINE 登入狀態已失效');
-              setError('auth_token_expired');
-            } else if (
-              code === 'auth_token_missing' ||
-              code === 'auth_token_malformed' ||
-              code === 'auth_token_invalid'
-            ) {
-              setErrorTitle('無法驗證登入身分');
-              setError('無法驗證登入身分，請重新從群組活動卡片開啟。');
-            } else if (apiMessage.includes('失效') || apiMessage.includes('/list')) {
-              setErrorTitle(CONTEXT_INVALID_MESSAGE);
-              setError(apiMessage);
-            } else {
-              setErrorTitle('無法驗證登入身分');
-              setError(apiMessage || '請重新從 LINE 開啟 JoyIn');
-            }
-          } else if (status === 500) {
-            setErrorTitle('無法載入活動');
-            const code = err instanceof ApiError ? err.code : 'INTERNAL';
-            setError(`伺服器發生錯誤${code ? `（${code}）` : ''}。請稍後再試，或重新從 /list 卡片開啟。`);
-          } else {
-            setError(err.message || '載入失敗');
-          }
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    void bootEventListPage(session).then((result) => {
+      if (cancelled) return;
+      if (result.kind === 'ready') {
+        setEvents(result.events);
+        setListStatus(200);
+        onFlowPhase?.('ready');
+        setLoading(false);
+        return;
+      }
+      onFlowPhase?.('failed');
+      setEvents([]);
+      if (result.kind === 'auth') {
+        setErrorKind('auth');
+        setListStatus(401);
+      } else if (result.kind === 'context_missing') {
+        setErrorKind('context_missing');
+        setErrorTitle(CONTEXT_MISSING_TITLE);
+        setErrorBody(CONTEXT_MISSING_BODY);
+        setListStatus(401);
+      } else if (result.kind === 'context_invalid') {
+        setErrorKind('context_invalid');
+        setErrorTitle(result.title || CONTEXT_EXPIRED_TITLE);
+        setErrorBody(result.body || CONTEXT_EXPIRED_BODY);
+        setListStatus(401);
+      } else if (result.kind === 'server') {
+        setErrorKind('server');
+        setErrorTitle(SERVER_ERROR_TITLE);
+        setErrorBody(result.message);
+        setListStatus(500);
+      } else {
+        setErrorKind('error');
+        setErrorTitle(result.title);
+        setErrorBody(result.message);
+      }
+      setLoading(false);
+    });
     return () => {
       cancelled = true;
     };
-  }, [session, onFlowPhase]);
+  }, [session, onFlowPhase, reloadKey]);
+
+  useEffect(() => {
+    return load();
+  }, [load]);
 
   const sorted = useMemo(
     () => [...events].sort((a, b) => a.startAt.localeCompare(b.startAt)),
@@ -142,14 +137,25 @@ export function EventListPage({
         </button>
       </div>
       {loading ? <StateBlock kind="loading" title="活動載入中…" /> : null}
-      {error === 'auth_token_expired' ? (
-        <AuthExpiredPanel inClient={session.inClient} kind="expired" />
-      ) : error ? (
+      {errorKind === 'auth' ? (
+        <AuthExpiredPanel inClient={session.inClient} onRelogin={onRelogin} />
+      ) : null}
+      {errorKind === 'context_missing' || errorKind === 'context_invalid' || errorKind === 'error' ? (
         <StateBlock kind="error" title={errorTitle}>
-          {error}
+          {errorBody}
         </StateBlock>
       ) : null}
-      {!loading && !error && sorted.length === 0 ? (
+      {errorKind === 'server' ? (
+        <StateBlock kind="error" title={errorTitle}>
+          {errorBody}
+          <div className="row" style={{ marginTop: 12, justifyContent: 'center' }}>
+            <button className="btn" type="button" onClick={() => setReloadKey((n) => n + 1)}>
+              重試
+            </button>
+          </div>
+        </StateBlock>
+      ) : null}
+      {!loading && !errorKind && sorted.length === 0 ? (
         <StateBlock kind="empty" title="目前沒有尚未結束的活動">
           任何群組成員都可以建立第一場活動。
           <div className="row empty-actions">

@@ -25,6 +25,58 @@ export class ApiError extends Error {
   }
 }
 
+/** One silent ID-token recovery per page lifetime — never login/logout loops. */
+let authRecoveryUsed = false;
+
+/** Test helper */
+export function resetApiAuthRecoveryForTests(): void {
+  authRecoveryUsed = false;
+}
+
+export function isAuthTokenError(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    (err.code === 'auth_token_expired' ||
+      err.code === 'auth_token_invalid' ||
+      err.code === 'auth_token_missing' ||
+      err.code === 'auth_token_malformed')
+  );
+}
+
+/**
+ * Re-read liff.getIDToken() once. Does not call login/logout.
+ * @returns true when a non-expired JWT is available
+ */
+export function tryRefreshIdTokenOnce(session: LiffSession, nowMs = Date.now()): boolean {
+  if (authRecoveryUsed) return false;
+  authRecoveryUsed = true;
+  const liff = getCachedLiff();
+  const raw = liff ? liff.getIDToken() : session.getIdToken();
+  const tokenDiag = describeIdTokenSafe(typeof raw === 'string' ? raw : '');
+  const decoded =
+    (liff && typeof liff.getDecodedIDToken === 'function' ? liff.getDecodedIDToken() : null) ??
+    session.getDecodedIdToken?.() ??
+    null;
+  const expiry = readIdTokenExpiry(decoded, nowUnixSeconds(nowMs));
+  logSafeDiag({
+    event: 'id_token_recovery_attempt',
+    phase: 'loading_events',
+    isInClient: session.inClient,
+    idTokenPresent: tokenDiag.present,
+    jwtPartCount: tokenDiag.partCount,
+    idTokenFormatOk: tokenDiag.formatOk,
+    iat: expiry.iat,
+    exp: expiry.exp,
+    now: expiry.now,
+    secondsUntilExpiry: expiry.secondsUntilExpiry,
+    at: new Date().toISOString(),
+  });
+  if (!raw || typeof raw !== 'string' || !raw.trim()) return false;
+  if (tokenDiag.partCount !== 3) return false;
+  if (expiry.expired) return false;
+  return true;
+}
+
 /**
  * Resolve a fresh ID Token immediately before each request.
  * Never reuses a string cached on React state / closures from boot time.
@@ -51,6 +103,8 @@ export function resolveFreshIdToken(session: LiffSession, nowMs = Date.now()): s
     exp: expiry.exp,
     now: expiry.now,
     secondsUntilExpiry: expiry.secondsUntilExpiry,
+    hasContext: Boolean(session.contextToken),
+    contextLength: session.contextToken?.length ?? 0,
     at: new Date().toISOString(),
   });
 
@@ -62,10 +116,14 @@ export function resolveFreshIdToken(session: LiffSession, nowMs = Date.now()): s
     throw new ApiError(401, 'auth_token_missing', '缺少 LIFF ID Token');
   }
 
+  if (tokenDiag.partCount !== 3 && !raw.startsWith('test:') && raw !== 'dev-token') {
+    throw new ApiError(401, 'auth_token_malformed', '登入 Token 格式錯誤');
+  }
+
   return raw.trim();
 }
 
-async function request<T>(
+async function requestOnce<T>(
   path: string,
   session: LiffSession,
   init: RequestInit = {},
@@ -95,6 +153,27 @@ async function request<T>(
     );
   }
   return data;
+}
+
+async function request<T>(
+  path: string,
+  session: LiffSession,
+  init: RequestInit = {},
+  options?: { omitContext?: boolean },
+): Promise<T> {
+  try {
+    return await requestOnce(path, session, init, options);
+  } catch (err) {
+    if (!isAuthTokenError(err)) throw err;
+    // One silent recovery: re-read getIDToken only (no login/logout).
+    if (!tryRefreshIdTokenOnce(session)) throw err;
+    try {
+      return await requestOnce(path, session, init, options);
+    } catch (retryErr) {
+      // Keep original auth classification for UI (never map to /list).
+      throw retryErr instanceof ApiError && isAuthTokenError(retryErr) ? retryErr : err;
+    }
+  }
 }
 
 export const api = {
@@ -142,7 +221,6 @@ export const api = {
     request<{ event: EventSummary }>(`/api/transfer-invites/${token}/accept`, session, {
       method: 'POST',
     }),
-  /** Refresh expired context — send token in body only (not X-JoyIn-Context). */
   refreshContext: (session: LiffSession, contextToken: string) =>
     request<{ context: string }>(
       '/api/context/refresh',
@@ -150,7 +228,6 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ context: contextToken }) },
       { omitContext: true },
     ),
-  /** Recover context from legacy eventId deep link. */
   recoverContextFromEvent: (session: LiffSession, eventId: string) =>
     request<{ context: string }>(
       '/api/context/recover-event',

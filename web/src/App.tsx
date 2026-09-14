@@ -7,10 +7,11 @@ import {
   AUTH_EXPIRED_BODY,
   AUTH_LOGIN_FAILED_BODY,
   AUTH_REDIRECTING_LOGIN,
+  CONTEXT_MISSING_BODY,
+  CONTEXT_MISSING_TITLE,
 } from './auth-recovery-keys';
 import { closeLiffWindowIfInClient } from './auth-recovery';
 import {
-  CONTEXT_MISSING_MESSAGE,
   getCachedLiff,
   initSession,
   retryInitSession,
@@ -19,7 +20,7 @@ import {
   type LiffBootResult,
   type LiffSession,
 } from './liff';
-import { sanitizeJoyInRoute } from './liff-deep-link';
+import { JOYIN_PENDING_ROUTE_KEY, sanitizeJoyInRoute } from './liff-deep-link';
 import { EventCreatePage } from './pages/EventCreatePage';
 import { EventDetailPage } from './pages/EventDetailPage';
 import { EventEditPage } from './pages/EventEditPage';
@@ -80,7 +81,8 @@ function GroupGate({
     return (
       <div className="stack">
         <SiteNav current="events" />
-        <StateBlock kind="error" title={CONTEXT_MISSING_MESSAGE}>
+        <StateBlock kind="error" title={CONTEXT_MISSING_TITLE}>
+          {CONTEXT_MISSING_BODY}
           <div className="row" style={{ marginTop: 12, justifyContent: 'center' }}>
             <Link to="/help" className="btn secondary">
               查看使用手冊
@@ -191,7 +193,10 @@ function LiffApp() {
     if (isExpiredAuthError(bootErrorCode, bootError)) {
       return (
         <div className="app-shell">
-          <AuthExpiredPanel inClient={canCloseWindow} />
+          <AuthExpiredPanel
+            inClient={canCloseWindow}
+            onRelogin={() => boot('manual-login')}
+          />
         </div>
       );
     }
@@ -262,7 +267,18 @@ function LiffApp() {
           path="/events"
           element={
             <GroupGate session={session}>
-              <EventListPage session={session} onFlowPhase={setPhase} />
+              <EventListPage
+                session={session}
+                onFlowPhase={setPhase}
+                onRelogin={() => {
+                  try {
+                    window.sessionStorage.setItem(JOYIN_PENDING_ROUTE_KEY, '/events');
+                  } catch {
+                    // ignore
+                  }
+                  boot('manual-login');
+                }}
+              />
             </GroupGate>
           }
         />

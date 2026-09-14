@@ -1,6 +1,7 @@
 /** sessionStorage key for surviving LIFF OAuth redirect */
 export const JOYIN_CONTEXT_STORAGE_KEY = 'joyin_liff_context';
 
+/** @deprecated Prefer CONTEXT_MISSING_TITLE + CONTEXT_MISSING_BODY */
 export const CONTEXT_MISSING_MESSAGE =
   '請回到 LINE 群組輸入 /list，並從最新活動卡片開啟 JoyIn';
 
@@ -8,6 +9,13 @@ export const CONTEXT_INVALID_MESSAGE = '活動連結已失效，請重新輸入 
 
 export const LINK_UNRECOVERABLE_MESSAGE =
   '此活動連結已失效，請回群組重新輸入 /list';
+
+export {
+  CONTEXT_MISSING_TITLE,
+  CONTEXT_MISSING_BODY,
+  CONTEXT_EXPIRED_TITLE,
+  CONTEXT_EXPIRED_BODY,
+} from './auth-recovery-keys';
 
 /** Must match Worker signed token shape: base64url.payload */
 export const LIFF_CONTEXT_TOKEN_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
