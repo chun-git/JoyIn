@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate, Link } from 'react-router-dom';
 import { StateBlock } from './components/StateBlock';
 import { SiteNav } from './components/SiteNav';
+import { AppShell } from './components/AppShell';
 import { AuthExpiredPanel, LoginFailedPanel } from './components/AuthExpiredPanel';
 import {
   AUTH_EXPIRED_BODY,
@@ -192,23 +193,23 @@ function LiffApp() {
   if (bootError) {
     if (isExpiredAuthError(bootErrorCode, bootError)) {
       return (
-        <div className="app-shell">
+        <AppShell>
           <AuthExpiredPanel
             inClient={canCloseWindow}
             onRelogin={() => boot('manual-login')}
           />
-        </div>
+        </AppShell>
       );
     }
     if (isLoginFailedError(bootErrorCode, bootError)) {
       return (
-        <div className="app-shell">
+        <AppShell>
           <LoginFailedPanel onRetryLogin={() => boot('manual-login')} />
-        </div>
+        </AppShell>
       );
     }
     return (
-      <div className="app-shell">
+      <AppShell>
         <div className="auth-panel">
           <StateBlock kind="error" title={phaseLabel(phase === 'login_required' ? 'login_required' : 'failed')}>
             {bootError}
@@ -235,13 +236,13 @@ function LiffApp() {
             </div>
           </StateBlock>
         </div>
-      </div>
+      </AppShell>
     );
   }
 
   if (booting || !session) {
     return (
-      <div className="app-shell">
+      <AppShell>
         <div className="auth-panel">
           <StateBlock
             kind="loading"
@@ -254,12 +255,12 @@ function LiffApp() {
             )}
           />
         </div>
-      </div>
+      </AppShell>
     );
   }
 
   return (
-    <div className="app-shell">
+    <AppShell>
       <Routes>
         <Route path="/transfer/:token" element={<TransferInvitePage session={session} />} />
         <Route path="/" element={<Navigate to="/events" replace />} />
@@ -308,7 +309,7 @@ function LiffApp() {
         />
         <Route path="*" element={<Navigate to="/events" replace />} />
       </Routes>
-    </div>
+    </AppShell>
   );
 }
 
@@ -317,12 +318,12 @@ export default function App() {
 
   if (isHelpPath(pathname)) {
     return (
-      <div className="app-shell help-shell">
+      <AppShell className="help-shell">
         <Routes>
           <Route path="/help" element={<Navigate to="/help/start" replace />} />
           <Route path="/help/:section" element={<HelpPage />} />
         </Routes>
-      </div>
+      </AppShell>
     );
   }
 
