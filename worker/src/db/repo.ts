@@ -1,5 +1,7 @@
 import type { EventStatus } from '../../../shared/types';
 import type { EventSummary } from '../../../shared/types';
+import { normalizeProxyName } from '../../../shared/preselect';
+import { historyRetentionCutoffIso } from '../lib/datetime';
 import { asBoolean } from '../lib/ids';
 
 export interface EventRow {
@@ -138,6 +140,66 @@ export async function listUpcomingEvents(
   const result = await stmt.all<EventRow>();
   const rows = result.results ?? [];
   return rows.map(toEventSummary);
+}
+
+/**
+ * Ended events within retention that the viewer participated in
+ * (organizer / SELF / PROXY creator). Sorted by end_at DESC.
+ */
+export async function listHistoryEventsForUser(
+  db: D1Database,
+  groupId: string,
+  lineUserId: string,
+  nowIso: string,
+  retentionCutoffIso: string,
+): Promise<EventRow[]> {
+  if (!groupId || !lineUserId) return [];
+  const { results } = await db
+    .prepare(
+      `${EVENT_LIST_SQL}
+       WHERE e.group_id = ?
+         AND e.status != 'DELETED'
+         AND COALESCE(e.end_at, e.event_at) <= ?
+         AND COALESCE(e.end_at, e.event_at) > ?
+         AND (
+           e.organizer_line_user_id = ?
+           OR EXISTS (
+             SELECT 1 FROM registrations r
+             WHERE r.event_id = e.event_id
+               AND (
+                 (
+                   r.type = 'SELF'
+                   AND TRIM(COALESCE(NULLIF(r.participant_line_user_id, ''), r.line_user_id, '')) = ?
+                 )
+                 OR (
+                   r.type = 'PROXY'
+                   AND r.created_by_line_user_id = ?
+                 )
+               )
+           )
+         )
+       ORDER BY COALESCE(e.end_at, e.event_at) DESC`,
+    )
+    .bind(groupId, nowIso, retentionCutoffIso, lineUserId, lineUserId, lineUserId)
+    .all<EventRow>();
+  return results ?? [];
+}
+
+export async function listRegistrationsForEventIds(
+  db: D1Database,
+  eventIds: string[],
+): Promise<RegistrationRow[]> {
+  if (eventIds.length === 0) return [];
+  const placeholders = eventIds.map(() => '?').join(', ');
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM registrations
+       WHERE event_id IN (${placeholders})
+       ORDER BY created_at ASC`,
+    )
+    .bind(...eventIds)
+    .all<RegistrationRow>();
+  return results ?? [];
 }
 
 export async function getEventRow(
@@ -765,47 +827,189 @@ export async function insertWebhookEvent(
   }
 }
 
-export async function cleanupExpiredData(db: D1Database, nowIso: string): Promise<{
+export async function upsertGroupProxyCandidates(
+  db: D1Database,
+  groupId: string,
+  candidates: Array<{ displayName: string; lastUsedAt: string }>,
+): Promise<void> {
+  const statements: D1PreparedStatement[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const displayName = candidate.displayName.trim().replace(/\s+/g, ' ');
+    const normalized = normalizeProxyName(displayName);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO group_proxy_candidates (group_id, normalized_name, display_name, last_used_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(group_id, normalized_name) DO UPDATE SET
+             display_name = excluded.display_name,
+             last_used_at = CASE
+               WHEN excluded.last_used_at > group_proxy_candidates.last_used_at
+               THEN excluded.last_used_at
+               ELSE group_proxy_candidates.last_used_at
+             END`,
+        )
+        .bind(groupId, normalized, displayName, candidate.lastUsedAt),
+    );
+  }
+  if (statements.length > 0) {
+    await db.batch(statements);
+  }
+}
+
+export async function listGroupProxyCandidates(
+  db: D1Database,
+  groupId: string,
+): Promise<Array<{ display_name: string; normalized_name: string; last_used_at: string }>> {
+  const { results } = await db
+    .prepare(
+      `SELECT display_name, normalized_name, last_used_at
+       FROM group_proxy_candidates
+       WHERE group_id = ?
+       ORDER BY last_used_at DESC, display_name COLLATE NOCASE ASC`,
+    )
+    .bind(groupId)
+    .all<{ display_name: string; normalized_name: string; last_used_at: string }>();
+  return results ?? [];
+}
+
+const CLEANUP_BATCH_SIZE = 20;
+
+async function preserveEventCandidatesBeforeDelete(
+  db: D1Database,
+  eventIds: string[],
+): Promise<void> {
+  if (eventIds.length === 0) return;
+  const placeholders = eventIds.map(() => '?').join(', ');
+  const { results: events } = await db
+    .prepare(
+      `SELECT event_id, group_id FROM events WHERE event_id IN (${placeholders})`,
+    )
+    .bind(...eventIds)
+    .all<{ event_id: string; group_id: string }>();
+  const groupByEvent = new Map((events ?? []).map((e) => [e.event_id, e.group_id]));
+
+  const { results: regs } = await db
+    .prepare(
+      `SELECT
+         event_id,
+         type,
+         participant_name,
+         COALESCE(NULLIF(participant_line_user_id, ''), line_user_id) AS line_user_id,
+         created_at
+       FROM registrations
+       WHERE event_id IN (${placeholders})`,
+    )
+    .bind(...eventIds)
+    .all<{
+      event_id: string;
+      type: 'SELF' | 'PROXY';
+      participant_name: string;
+      line_user_id: string | null;
+      created_at: string;
+    }>();
+
+  const lineByGroup = new Map<
+    string,
+    Array<{ lineUserId: string; displayName: string; pictureUrl: string | null }>
+  >();
+  const proxyByGroup = new Map<string, Array<{ displayName: string; lastUsedAt: string }>>();
+
+  for (const row of regs ?? []) {
+    const groupId = groupByEvent.get(row.event_id);
+    if (!groupId) continue;
+    if (row.type === 'SELF') {
+      const lineUserId = (row.line_user_id || '').trim();
+      const displayName = (row.participant_name || '').trim();
+      if (!lineUserId || !displayName) continue;
+      const list = lineByGroup.get(groupId) ?? [];
+      list.push({ lineUserId, displayName, pictureUrl: null });
+      lineByGroup.set(groupId, list);
+    } else if (row.type === 'PROXY') {
+      const displayName = (row.participant_name || '').trim().replace(/\s+/g, ' ');
+      if (!displayName) continue;
+      const list = proxyByGroup.get(groupId) ?? [];
+      list.push({ displayName, lastUsedAt: row.created_at });
+      proxyByGroup.set(groupId, list);
+    }
+  }
+
+  const syncedAt = new Date().toISOString();
+  for (const [groupId, members] of lineByGroup) {
+    // Dedupe keeping last name.
+    const byId = new Map<string, { lineUserId: string; displayName: string; pictureUrl: string | null }>();
+    for (const member of members) byId.set(member.lineUserId, member);
+    await upsertGroupMembersCache(db, groupId, [...byId.values()], syncedAt);
+  }
+  for (const [groupId, proxies] of proxyByGroup) {
+    await upsertGroupProxyCandidates(db, groupId, proxies);
+  }
+}
+
+/**
+ * Delete events whose end_at is older than the history retention cutoff.
+ * Never deletes ongoing (not-yet-ended) events. Batched to avoid huge DELETEs.
+ */
+export async function cleanupExpiredData(db: D1Database, nowIsoValue: string): Promise<{
   events: number;
   registrations: number;
   transfers: number;
   webhooks: number;
 }> {
-  const expired = await db
-    .prepare('SELECT event_id FROM events WHERE COALESCE(end_at, event_at) <= ?')
-    .bind(nowIso)
-    .all<{ event_id: string }>();
-  const ids = expired.results.map((row) => row.event_id);
+  const cutoff = historyRetentionCutoffIso(new Date(nowIsoValue));
 
+  let eventsDeleted = 0;
   let registrations = 0;
   let transfers = 0;
-  if (ids.length > 0) {
+
+  for (let round = 0; round < 50; round += 1) {
+    const expired = await db
+      .prepare(
+        `SELECT event_id FROM events
+         WHERE COALESCE(end_at, event_at) < ?
+         ORDER BY COALESCE(end_at, event_at) ASC
+         LIMIT ?`,
+      )
+      .bind(cutoff, CLEANUP_BATCH_SIZE)
+      .all<{ event_id: string }>();
+    const ids = (expired.results ?? []).map((row) => row.event_id);
+    if (ids.length === 0) break;
+
+    await preserveEventCandidatesBeforeDelete(db, ids);
+
     const placeholders = ids.map(() => '?').join(', ');
     const reg = await db
       .prepare(`DELETE FROM registrations WHERE event_id IN (${placeholders})`)
       .bind(...ids)
       .run();
-    registrations = reg.meta.changes ?? 0;
+    registrations += reg.meta.changes ?? 0;
     const trans = await db
       .prepare(`DELETE FROM organizer_transfers WHERE event_id IN (${placeholders})`)
       .bind(...ids)
       .run();
-    transfers = trans.meta.changes ?? 0;
+    transfers += trans.meta.changes ?? 0;
     await db
       .prepare(`DELETE FROM organizer_transfer_invites WHERE event_id IN (${placeholders})`)
       .bind(...ids)
       .run();
     await db.prepare(`DELETE FROM events WHERE event_id IN (${placeholders})`).bind(...ids).run();
+    eventsDeleted += ids.length;
+    if (ids.length < CLEANUP_BATCH_SIZE) break;
   }
 
-  const sevenDaysAgo = new Date(new Date(nowIso).getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const sevenDaysAgo = new Date(
+    new Date(nowIsoValue).getTime() - 7 * 24 * 60 * 60 * 1000,
+  ).toISOString();
   const webhook = await db
     .prepare('DELETE FROM webhook_events WHERE received_at < ?')
     .bind(sevenDaysAgo)
     .run();
 
   return {
-    events: ids.length,
+    events: eventsDeleted,
     registrations,
     transfers,
     webhooks: webhook.meta.changes ?? 0,

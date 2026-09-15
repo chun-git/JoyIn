@@ -3,6 +3,7 @@ import type {
   CreateEventInput,
   EventDetail,
   EventSummary,
+  HistoryEventSummary,
   PreselectMemberRoster,
   TransferInviteCreated,
   TransferInvitePreview,
@@ -180,6 +181,8 @@ async function request<T>(
 export const api = {
   listEvents: (session: LiffSession) =>
     request<{ events: EventSummary[] }>('/api/events', session),
+  listHistoryEvents: (session: LiffSession) =>
+    request<{ events: HistoryEventSummary[] }>('/api/events/history', session),
   listGroupMembers: (
     session: LiffSession,
     options?: { refresh?: boolean; copyEventId?: string },

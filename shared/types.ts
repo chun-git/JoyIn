@@ -28,6 +28,15 @@ export interface EventSummary {
   organizerDisplayName: string;
   createdAt: string;
   updatedAt: string;
+  /** True when end_at has passed (still within retention when returned by APIs). */
+  isEnded?: boolean;
+}
+
+export type HistoryViewerRole = 'organizer' | 'attended' | 'waitlist' | 'proxy';
+
+export interface HistoryEventSummary extends EventSummary {
+  isEnded: true;
+  viewerRoles: HistoryViewerRole[];
 }
 
 export interface RegistrationRecord {

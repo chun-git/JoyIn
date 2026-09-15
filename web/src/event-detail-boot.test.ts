@@ -56,10 +56,21 @@ describe('bootEventDetailPage', () => {
     recoverContextFromEvent.mockReset();
   });
 
-  it('redirects ended events to list with toast', async () => {
-    getEvent.mockRejectedValue(new ApiError(410, 'event_ended', '此活動已結束'));
+  it('loads recently ended events as ready (history detail)', async () => {
+    getEvent.mockResolvedValue({
+      event: { eventId: 'e1', isEnded: true, name: '舊活動', registrations: { confirmed: [], waitlist: [] } },
+    });
     const result = await bootEventDetailPage(session({ contextToken: freshContextToken() }), 'e1');
-    expect(result).toEqual({ kind: 'redirect_list', toast: '此活動已結束' });
+    expect(result).toEqual({
+      kind: 'ready',
+      event: expect.objectContaining({ eventId: 'e1', isEnded: true }),
+    });
+  });
+
+  it('redirects past-retention / missing events to list with toast', async () => {
+    getEvent.mockRejectedValue(new ApiError(404, 'event_not_found', '找不到此活動'));
+    const result = await bootEventDetailPage(session({ contextToken: freshContextToken() }), 'e1');
+    expect(result).toEqual({ kind: 'redirect_list', toast: '找不到此活動' });
   });
 
   it('redirects deleted events to list with toast', async () => {

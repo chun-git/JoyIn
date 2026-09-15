@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import type { EventSummary } from '../../../shared/types';
+import type { EventSummary, HistoryEventSummary } from '../../../shared/types';
 import {
   CONTEXT_EXPIRED_BODY,
   CONTEXT_EXPIRED_TITLE,
@@ -8,12 +8,15 @@ import {
   CONTEXT_MISSING_TITLE,
   SERVER_ERROR_TITLE,
 } from '../auth-recovery-keys';
+import { api } from '../api';
 import { AuthExpiredPanel } from '../components/AuthExpiredPanel';
 import { EventCard } from '../components/EventCard';
 import { StateBlock } from '../components/StateBlock';
 import { SiteNav } from '../components/SiteNav';
 import { bootEventListPage } from '../event-list-boot';
 import type { JoyInFlowPhase, LiffSession } from '../liff';
+
+type ListTab = 'upcoming' | 'history';
 
 export function EventListPage({
   session,
@@ -27,10 +30,13 @@ export function EventListPage({
 }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const showDiag = searchParams.get('diag') === '1';
+  const tab: ListTab = searchParams.get('tab') === 'history' ? 'history' : 'upcoming';
   const [events, setEvents] = useState<EventSummary[]>([]);
+  const [historyEvents, setHistoryEvents] = useState<HistoryEventSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [errorKind, setErrorKind] = useState<
     '' | 'auth' | 'context_missing' | 'context_invalid' | 'server' | 'error'
   >('');
@@ -47,6 +53,16 @@ export function EventListPage({
     if (!toast) return;
     navigate('/events', { replace: true, state: null });
   }, [toast, navigate]);
+
+  const setTab = useCallback(
+    (next: ListTab) => {
+      const params = new URLSearchParams(searchParams);
+      if (next === 'history') params.set('tab', 'history');
+      else params.delete('tab');
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
 
   const load = useCallback(() => {
     let cancelled = false;
@@ -101,6 +117,28 @@ export function EventListPage({
     return load();
   }, [load]);
 
+  useEffect(() => {
+    if (tab !== 'history' || errorKind) return;
+    let cancelled = false;
+    setHistoryLoading(true);
+    void api
+      .listHistoryEvents(session)
+      .then((result) => {
+        if (cancelled) return;
+        setHistoryEvents(Array.isArray(result.events) ? result.events : []);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setHistoryEvents([]);
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, session, errorKind, reloadKey]);
+
   const sorted = useMemo(
     () => [...events].sort((a, b) => a.startAt.localeCompare(b.startAt)),
     [events],
@@ -136,6 +174,29 @@ export function EventListPage({
           新增活動
         </button>
       </div>
+      <div className="list-tabs" role="tablist" aria-label="活動列表切換">
+        <button
+          type="button"
+          role="tab"
+          className={`list-tab${tab === 'upcoming' ? ' is-active' : ''}`}
+          aria-selected={tab === 'upcoming'}
+          onClick={() => setTab('upcoming')}
+        >
+          即將舉行
+        </button>
+        <button
+          type="button"
+          role="tab"
+          className={`list-tab${tab === 'history' ? ' is-active' : ''}`}
+          aria-selected={tab === 'history'}
+          onClick={() => setTab('history')}
+        >
+          歷史紀錄
+        </button>
+      </div>
+      {tab === 'history' ? (
+        <p className="hint list-tab-hint">歷史活動（近30天的活動紀錄）</p>
+      ) : null}
       {loading ? <StateBlock kind="loading" title="活動載入中…" /> : null}
       {errorKind === 'auth' ? (
         <AuthExpiredPanel inClient={session.inClient} onRelogin={onRelogin} />
@@ -155,7 +216,7 @@ export function EventListPage({
           </div>
         </StateBlock>
       ) : null}
-      {!loading && !errorKind && sorted.length === 0 ? (
+      {!loading && !errorKind && tab === 'upcoming' && sorted.length === 0 ? (
         <StateBlock kind="empty" title="目前沒有尚未結束的活動">
           任何群組成員都可以建立第一場活動。
           <div className="row empty-actions">
@@ -168,15 +229,35 @@ export function EventListPage({
           </div>
         </StateBlock>
       ) : null}
-      <div className="event-grid">
-        {sorted.map((event) => (
-          <EventCard
-            key={event.eventId}
-            event={event}
-            onClick={() => navigate(`/events/${event.eventId}`)}
-          />
-        ))}
-      </div>
+      {!loading && !errorKind && tab === 'history' ? (
+        historyLoading ? (
+          <StateBlock kind="loading" title="歷史紀錄載入中…" />
+        ) : historyEvents.length === 0 ? (
+          <StateBlock kind="empty" title="最近 30 天沒有已結束的活動" />
+        ) : (
+          <div className="event-grid">
+            {historyEvents.map((event) => (
+              <EventCard
+                key={event.eventId}
+                event={event}
+                history
+                onClick={() => navigate(`/events/${event.eventId}?from=history`)}
+              />
+            ))}
+          </div>
+        )
+      ) : null}
+      {!loading && !errorKind && tab === 'upcoming' ? (
+        <div className="event-grid">
+          {sorted.map((event) => (
+            <EventCard
+              key={event.eventId}
+              event={event}
+              onClick={() => navigate(`/events/${event.eventId}`)}
+            />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

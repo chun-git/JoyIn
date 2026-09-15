@@ -3,21 +3,33 @@ import type {
   CreateEventInput,
   EventDetail,
   EventSummary,
+  HistoryEventSummary,
+  HistoryViewerRole,
   UpdateEventInput,
 } from '../../../shared/types';
 import { Errors } from '../lib/errors';
-import { isExpired, nowIso, validateEventSchedule } from '../lib/datetime';
+import {
+  historyRetentionCutoffIso,
+  isBeyondHistoryRetention,
+  isExpired,
+  nowIso,
+  validateEventSchedule,
+} from '../lib/datetime';
 import { newId, toRegistrationRecord } from '../lib/ids';
 import {
   getEventRow,
+  listHistoryEventsForUser,
   listRegistrations,
+  listRegistrationsForEventIds,
   listUpcomingEvents,
   prepareInsertEventStatement,
   prepareInsertRegistrationStatement,
   setEventStatus,
   toEventSummary,
   updateEventRow,
+  type EventRow,
   type GroupMemberRow,
+  type RegistrationRow,
 } from '../db/repo';
 import type { AuthUser } from '../env';
 import {
@@ -41,26 +53,106 @@ export async function listEvents(
   return listUpcomingEvents(db, groupId, nowIso(), limit);
 }
 
+function participantLineId(row: RegistrationRow): string | null {
+  const id =
+    (row.participant_line_user_id || '').trim() ||
+    (row.type === 'SELF' ? (row.line_user_id || '').trim() : '');
+  return id || null;
+}
+
+function viewerRolesForEvent(
+  row: EventRow,
+  regs: RegistrationRow[],
+  lineUserId: string,
+): HistoryViewerRole[] {
+  const roles: HistoryViewerRole[] = [];
+  if (row.organizer_line_user_id === lineUserId) roles.push('organizer');
+  const self = regs.find(
+    (item) => item.type === 'SELF' && participantLineId(item) === lineUserId,
+  );
+  if (self?.status === 'CONFIRMED') roles.push('attended');
+  if (self?.status === 'WAITLIST') roles.push('waitlist');
+  if (regs.some((item) => item.type === 'PROXY' && item.created_by_line_user_id === lineUserId)) {
+    roles.push('proxy');
+  }
+  return roles;
+}
+
+export async function listHistoryEvents(
+  db: D1Database,
+  groupId: string,
+  user: AuthUser,
+): Promise<HistoryEventSummary[]> {
+  const now = new Date();
+  const nowIsoValue = nowIso(now);
+  const cutoff = historyRetentionCutoffIso(now);
+  const rows = await listHistoryEventsForUser(
+    db,
+    groupId,
+    user.lineUserId,
+    nowIsoValue,
+    cutoff,
+  );
+  const regs = await listRegistrationsForEventIds(
+    db,
+    rows.map((row) => row.event_id),
+  );
+  const regsByEvent = new Map<string, RegistrationRow[]>();
+  for (const reg of regs) {
+    const list = regsByEvent.get(reg.event_id) ?? [];
+    list.push(reg);
+    regsByEvent.set(reg.event_id, list);
+  }
+  return rows.map((row) => ({
+    ...toEventSummary(row),
+    isEnded: true as const,
+    viewerRoles: viewerRolesForEvent(row, regsByEvent.get(row.event_id) ?? [], user.lineUserId),
+  }));
+}
+
+/** Mutable operations require a not-yet-ended, non-deleted event in this group. */
 export async function getVisibleEvent(db: D1Database, eventId: string, groupId?: string) {
   const row = await getEventRow(db, eventId);
   if (!row) {
     throw Errors.eventNotFound();
   }
   if (row.status === 'DELETED') {
-    // Same group: tell the client it was deleted. Cross-group: do not leak.
     if (groupId && row.group_id !== groupId) {
       throw Errors.eventNotFound();
     }
     throw Errors.eventDeleted();
   }
   if (groupId && row.group_id !== groupId) {
-    // Do not leak whether the event exists in another group.
     throw Errors.eventNotFound();
   }
   if (isExpired(endAtOf(row))) {
     throw Errors.eventEnded();
   }
-  // CLOSED events remain visible (registration blocked elsewhere).
+  return row;
+}
+
+/**
+ * Read detail for upcoming or recently-ended events (within 30-day retention).
+ * Past retention → not found (same as cleaned).
+ */
+export async function getReadableEvent(db: D1Database, eventId: string, groupId?: string) {
+  const row = await getEventRow(db, eventId);
+  if (!row) {
+    throw Errors.eventNotFound();
+  }
+  if (row.status === 'DELETED') {
+    if (groupId && row.group_id !== groupId) {
+      throw Errors.eventNotFound();
+    }
+    throw Errors.eventDeleted();
+  }
+  if (groupId && row.group_id !== groupId) {
+    throw Errors.eventNotFound();
+  }
+  const endAt = endAtOf(row);
+  if (isBeyondHistoryRetention(endAt)) {
+    throw Errors.eventNotFound();
+  }
   return row;
 }
 
@@ -70,12 +162,16 @@ export async function getEventDetail(
   user: AuthUser,
   groupId?: string,
 ): Promise<EventDetail> {
-  const row = await getVisibleEvent(db, eventId, groupId);
+  const row = await getReadableEvent(db, eventId, groupId);
+  const ended = isExpired(endAtOf(row));
   const summary = toEventSummary(row);
   const registrations = await listRegistrations(db, eventId);
-  const records = registrations.map((item) =>
+  let records = registrations.map((item) =>
     toRegistrationRecord(item, user.lineUserId, row.organizer_line_user_id),
   );
+  if (ended) {
+    records = records.map((item) => ({ ...item, canCancel: false }));
+  }
   const confirmed = records.filter((item) => item.status === 'CONFIRMED');
   const waitlist = records
     .filter((item) => item.status === 'WAITLIST')
@@ -83,6 +179,7 @@ export async function getEventDetail(
 
   return {
     ...summary,
+    isEnded: ended,
     confirmedCount: confirmed.length,
     waitlistCount: waitlist.length,
     registrations: { confirmed, waitlist },
@@ -355,7 +452,7 @@ export async function copyEvent(
     fetchImpl?: typeof fetch;
   },
 ): Promise<EventSummary> {
-  const source = await getVisibleEvent(db, eventId, groupId);
+  const source = await getReadableEvent(db, eventId, groupId);
   return createEvent(
     db,
     source.group_id,

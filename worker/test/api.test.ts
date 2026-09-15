@@ -1063,19 +1063,31 @@ describe('copy event', () => {
     expect((missing.body as { error?: string }).error).toBe('event_not_found');
   });
 
-  it('returns event_ended for finished events and event_deleted for soft-deleted', async () => {
+  it('returns ended event detail within retention; past retention is not found; soft-delete stays gone', async () => {
     const { env } = await import('cloudflare:test');
-    const created = await createEvent('U-lee', 'Lee', { name: '已結束活動' });
-    const eventId = created.body.event.eventId;
-    await env.DB.prepare(`UPDATE events SET end_at = ? WHERE event_id = ?`)
-      .bind('2020-01-01T00:00:00.000Z', eventId)
+    const recent = await createEvent('U-lee', 'Lee', { name: '近期結束' });
+    const recentId = recent.body.event.eventId;
+    const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+    await env.DB.prepare(`UPDATE events SET end_at = ?, start_at = ? WHERE event_id = ?`)
+      .bind(fiveDaysAgo, fiveDaysAgo, recentId)
       .run();
 
-    const ended = await json(`/api/events/${eventId}`, {
+    const ended = await json<{ event: { isEnded: boolean } }>(`/api/events/${recentId}`, {
       headers: await authHeaders('U-lee', 'Lee'),
     });
-    expect(ended.status).toBe(410);
-    expect((ended.body as { error?: string }).error).toBe('event_ended');
+    expect(ended.status).toBe(200);
+    expect(ended.body.event.isEnded).toBe(true);
+
+    const ancient = await createEvent('U-lee', 'Lee', { name: '過期已久' });
+    const ancientId = ancient.body.event.eventId;
+    await env.DB.prepare(`UPDATE events SET end_at = ? WHERE event_id = ?`)
+      .bind('2020-01-01T00:00:00.000Z', ancientId)
+      .run();
+    const gone = await json(`/api/events/${ancientId}`, {
+      headers: await authHeaders('U-lee', 'Lee'),
+    });
+    expect(gone.status).toBe(404);
+    expect((gone.body as { error?: string }).error).toBe('event_not_found');
 
     const open = await createEvent('U-lee', 'Lee', { name: '待刪活動' });
     await json(`/api/events/${open.body.event.eventId}`, {

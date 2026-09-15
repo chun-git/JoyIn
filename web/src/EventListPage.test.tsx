@@ -8,6 +8,7 @@ import { ApiError } from './api';
 import { AUTH_EXPIRED_BODY, AUTH_EXPIRED_TITLE, AUTH_RELOGIN_BUTTON } from './auth-recovery-keys';
 
 const listEvents = vi.fn();
+const listHistoryEvents = vi.fn();
 const refreshContext = vi.fn();
 
 vi.mock('./api', async () => {
@@ -16,6 +17,7 @@ vi.mock('./api', async () => {
     ...actual,
     api: {
       listEvents: (...args: unknown[]) => listEvents(...args),
+      listHistoryEvents: (...args: unknown[]) => listHistoryEvents(...args),
       refreshContext: (...args: unknown[]) => refreshContext(...args),
     },
   };
@@ -41,8 +43,10 @@ const session: LiffSession = {
 describe('EventListPage', () => {
   beforeEach(() => {
     listEvents.mockReset();
+    listHistoryEvents.mockReset();
     refreshContext.mockReset();
     listEvents.mockResolvedValue({ events: [sampleEvent] });
+    listHistoryEvents.mockResolvedValue({ events: [] });
   });
 
   it('loads events from GET /api/events on mount', async () => {
@@ -56,6 +60,8 @@ describe('EventListPage', () => {
       expect(listEvents).toHaveBeenCalledWith(session);
     });
     expect(await screen.findByText('週五桌遊夜')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '即將舉行' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '歷史紀錄' })).toBeInTheDocument();
     const nav = screen.getByRole('navigation', { name: '主要' });
     expect(within(nav).getByRole('link', { name: '活動' })).toHaveAttribute('aria-current', 'page');
     expect(within(nav).getByRole('link', { name: '使用手冊' })).toHaveAttribute('href', '/help');
@@ -87,6 +93,21 @@ describe('EventListPage', () => {
     );
     expect(await screen.findByText('目前沒有尚未結束的活動')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '查看操作說明' })).toBeInTheDocument();
+  });
+
+  it('shows history empty copy without requiring /list', async () => {
+    const user = await import('@testing-library/user-event').then((m) => m.default.setup());
+    render(
+      <MemoryRouter>
+        <EventListPage session={session} />
+      </MemoryRouter>,
+    );
+    await screen.findByText('週五桌遊夜');
+    await user.click(screen.getByRole('tab', { name: '歷史紀錄' }));
+    expect(await screen.findByText('歷史活動（近30天的活動紀錄）')).toBeInTheDocument();
+    expect(await screen.findByText('最近 30 天沒有已結束的活動')).toBeInTheDocument();
+    expect(listHistoryEvents).toHaveBeenCalled();
+    expect(screen.queryByText(/重新輸入 \/list/)).not.toBeInTheDocument();
   });
 
   it('shows 重新登入 LINE on auth expiry — never /list', async () => {

@@ -24,6 +24,7 @@ import {
   deleteEvent,
   getEventDetail,
   listEvents,
+  listHistoryEvents,
   updateEvent,
 } from '../services/events';
 import {
@@ -137,6 +138,12 @@ api.post('/context/recover-event', async (c) => {
 api.get('/events', async (c) => {
   const groupId = requireGroupId(c);
   const events = await listEvents(c.env.DB, groupId);
+  return c.json({ events });
+});
+
+api.get('/events/history', async (c) => {
+  const groupId = requireGroupId(c);
+  const events = await listHistoryEvents(c.env.DB, groupId, userOf(c));
   return c.json({ events });
 });
 

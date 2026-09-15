@@ -45,6 +45,22 @@ export function isExpired(eventAt: string, now = new Date()): boolean {
   return new Date(eventAt).getTime() <= now.getTime();
 }
 
+/** Keep ended events readable/listable for this many days after end_at. */
+export const HISTORY_RETENTION_DAYS = 30;
+
+export function historyRetentionCutoffIso(now = new Date()): string {
+  return new Date(
+    now.getTime() - HISTORY_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
+}
+
+/** True when end_at is past and older than the retention window. */
+export function isBeyondHistoryRetention(endAt: string, now = new Date()): boolean {
+  const endMs = new Date(endAt).getTime();
+  if (!Number.isFinite(endMs)) return true;
+  return endMs <= now.getTime() - HISTORY_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+}
+
 export function isRangeInvalid(startAt: string, endAt: string): boolean {
   return new Date(endAt).getTime() <= new Date(startAt).getTime();
 }

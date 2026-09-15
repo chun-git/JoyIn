@@ -11,6 +11,7 @@ import {
   listCachedGroupMembers,
   listEventRosterParticipants,
   listGroupHistoryRosterParticipants,
+  listGroupProxyCandidates,
   lookupParticipantNamesByLineIds,
   pruneGroupMembersNotIn,
   upsertGroupMembersCache,
@@ -331,6 +332,23 @@ export async function buildPreselectMemberRoster(
       );
       if (draft) pushUnique(seenLine, seenProxy, history, draft);
     }
+  }
+
+  const storedProxies = await listGroupProxyCandidates(db, groupId);
+  for (const row of storedProxies) {
+    const proxyName = row.display_name.trim().replace(/\s+/g, ' ');
+    if (!proxyName) continue;
+    pushUnique(seenLine, seenProxy, isCopy ? history : proxies, {
+      key: proxyCandidateKey(proxyName),
+      kind: 'proxy',
+      lineUserId: null,
+      proxyName,
+      displayName: proxyName,
+      pictureUrl: null,
+      section: isCopy ? 'history' : 'proxy',
+      defaultSelected: false,
+      badge: 'proxy',
+    });
   }
 
   // Persist historical LINE ids into cache so D1 is not empty after LINE failures.

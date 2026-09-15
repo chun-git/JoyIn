@@ -607,6 +607,38 @@ button.event-card-main {
 h1 { margin: 0 0 8px; font-size: 26px; }
 section h2 { margin: 0 0 10px; font-size: 18px; }
 
+.list-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+.list-tab {
+  flex: 1 1 140px;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--paper);
+  color: var(--muted);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.list-tab.is-active {
+  border-color: var(--brand);
+  color: var(--navy);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 35%, transparent);
+}
+.list-tab:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+.list-tab-hint {
+  margin: 0;
+}
 .list-greeting {
   margin: 0;
   color: var(--muted);

@@ -184,6 +184,8 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
   const shareUrl = invite ? `${window.location.origin}${invite.sharePath}` : '';
   const justCreated = searchParams.get('created') === '1';
   const justCopied = searchParams.get('copied') === '1';
+  const fromHistory = searchParams.get('from') === 'history' || Boolean(event?.isEnded);
+  const isHistory = Boolean(event?.isEnded);
 
   if (!event && !error) return <StateBlock kind="loading" title="載入活動中…" />;
   if (error && !event) {
@@ -198,19 +200,20 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
 
   const full = event.confirmedCount >= event.capacity;
   const canJoin =
+    !isHistory &&
     event.status === 'OPEN' &&
     !event.viewer.selfRegistration &&
     (!full || event.waitlistEnabled);
   const joinLabel = full && event.waitlistEnabled ? '加入候補' : '本人報名';
   const proxyLabel = full && event.waitlistEnabled ? '代他人加入候補' : '代他人報名';
+  const listPath = fromHistory ? '/events?tab=history' : '/events';
 
   return (
     <div className="stack event-detail-page">
       <SiteNav current="events" />
 
-      {/* 1. 返回活動列表 */}
       <div className="detail-back-row">
-        <BackToListButton onClick={() => navigate('/events')} />
+        <BackToListButton onClick={() => navigate(listPath)} />
       </div>
 
       {justCreated || justCopied ? (
@@ -227,92 +230,110 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
       {notice ? <div className="toast">{notice}</div> : null}
       {error ? <StateBlock kind="error" title="操作失敗">{error}</StateBlock> : null}
 
-      {/* 2. 活動資訊卡片 */}
-      <EventCard event={event} />
+      <EventCard event={event} history={isHistory} />
       <p className="hint organizer-line">主揪：{event.organizerDisplayName}</p>
+      {isHistory ? <p className="hint">此為歷史活動（唯讀），僅供查看與複製。</p> : null}
 
-      {/* 3. 正式報名名單 */}
       <RegistrationList
         title={`正式報名名單（${event.confirmedCount}／${event.capacity}）`}
         emptyLabel="目前尚無正式報名"
         items={event.registrations.confirmed}
         headingExtra={
-          <button
-            type="button"
-            className="icon-help"
-            aria-label="查看報名與代報說明"
-            onClick={() => setHelpOpen(true)}
-          >
-            <span aria-hidden="true">?</span>
-          </button>
+          isHistory ? undefined : (
+            <button
+              type="button"
+              className="icon-help"
+              aria-label="查看報名與代報說明"
+              onClick={() => setHelpOpen(true)}
+            >
+              <span aria-hidden="true">?</span>
+            </button>
+          )
         }
         onRequestCancel={(item) => {
+          if (isHistory) return;
           setCancelError('');
           setCancelTarget(item);
         }}
       />
 
-      {/* 4. 候補名單（有開放候補時） */}
       {event.waitlistEnabled ? (
         <RegistrationList
           title={`候補名單（${event.waitlistCount}）`}
           emptyLabel="目前尚無候補"
           items={event.registrations.waitlist}
           onRequestCancel={(item) => {
+            if (isHistory) return;
             setCancelError('');
             setCancelTarget(item);
           }}
         />
       ) : null}
 
-      {/* 5. 本人報名／代報操作 */}
-      <section className="panel stack">
-        <h2>報名</h2>
-        {event.status !== 'OPEN' ? <p className="hint">此活動已關閉報名。</p> : null}
-        <div className="row">
+      {!isHistory ? (
+        <section className="panel stack">
+          <h2>報名</h2>
+          {event.status !== 'OPEN' ? <p className="hint">此活動已關閉報名。</p> : null}
+          <div className="row">
+            <button
+              className="btn"
+              type="button"
+              disabled={!canJoin || pending}
+              onClick={() => run(() => api.join(session, eventId), full ? '已加入候補' : '報名成功')}
+            >
+              {joinLabel}
+            </button>
+          </div>
+          {event.viewer.selfRegistration ? (
+            <p className="success">
+              你已{event.viewer.selfRegistration.status === 'WAITLIST' ? '加入候補' : '報名'}：
+              {event.viewer.selfRegistration.displayLabel}
+              {event.viewer.selfRegistration.waitlistPosition
+                ? `（第 ${event.viewer.selfRegistration.waitlistPosition} 位）`
+                : ''}
+            </p>
+          ) : null}
+          <label className="field">
+            <span>{proxyLabel}</span>
+            <input
+              value={proxyName}
+              onChange={(e) => setProxyName(e.target.value)}
+              placeholder="參加者姓名，例如 Amy"
+            />
+          </label>
           <button
-            className="btn"
+            className="btn secondary"
             type="button"
-            disabled={!canJoin || pending}
-            onClick={() => run(() => api.join(session, eventId), full ? '已加入候補' : '報名成功')}
+            disabled={pending || event.status !== 'OPEN' || !proxyName.trim()}
+            onClick={() =>
+              run(async () => {
+                await api.proxyJoin(session, eventId, proxyName.trim());
+                setProxyName('');
+              }, '代報成功')
+            }
           >
-            {joinLabel}
+            {proxyLabel}
           </button>
-        </div>
-        {event.viewer.selfRegistration ? (
-          <p className="success">
-            你已{event.viewer.selfRegistration.status === 'WAITLIST' ? '加入候補' : '報名'}：
-            {event.viewer.selfRegistration.displayLabel}
-            {event.viewer.selfRegistration.waitlistPosition
-              ? `（第 ${event.viewer.selfRegistration.waitlistPosition} 位）`
-              : ''}
-          </p>
-        ) : null}
-        <label className="field">
-          <span>{proxyLabel}</span>
-          <input
-            value={proxyName}
-            onChange={(e) => setProxyName(e.target.value)}
-            placeholder="參加者姓名，例如 Amy"
-          />
-        </label>
-        <button
-          className="btn secondary"
-          type="button"
-          disabled={pending || event.status !== 'OPEN' || !proxyName.trim()}
-          onClick={() =>
-            run(async () => {
-              await api.proxyJoin(session, eventId, proxyName.trim());
-              setProxyName('');
-            }, '代報成功')
-          }
-        >
-          {proxyLabel}
-        </button>
-      </section>
+        </section>
+      ) : event.viewer.selfRegistration || event.viewer.proxyRegistrations.length > 0 || event.viewer.isOrganizer ? (
+        <section className="panel stack">
+          <h2>你的紀錄</h2>
+          {event.viewer.isOrganizer ? <p className="hint">身分：主揪</p> : null}
+          {event.viewer.selfRegistration ? (
+            <p className="hint">
+              {event.viewer.selfRegistration.status === 'WAITLIST' ? '候補' : '已參加'}：
+              {event.viewer.selfRegistration.displayLabel}
+            </p>
+          ) : null}
+          {event.viewer.proxyRegistrations.map((item) => (
+            <p className="hint" key={item.registrationId}>
+              曾代報：{item.displayLabel}
+            </p>
+          ))}
+        </section>
+      ) : null}
 
-      {/* 6. 主揪管理 */}
-      {event.viewer.isOrganizer ? (
+      {!isHistory && event.viewer.isOrganizer ? (
         <section className="panel stack organizer-panel">
           <h2>主揪管理</h2>
           <div className="row">
@@ -405,7 +426,6 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
         </section>
       ) : null}
 
-      {/* 7. 複製活動（整頁最下方） */}
       <div className="copy-event-footer">
         <CopyEventButton onClick={() => navigate(`/events/new?copy=${eventId}`)} />
       </div>
