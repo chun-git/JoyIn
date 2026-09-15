@@ -39,6 +39,7 @@ import {
   recoverContextFromEventId,
   refreshExpiredContext,
 } from '../services/context-recovery';
+import { preorderRoutes } from './preorders';
 import type { CopyEventInput, UpdateEventInput } from '../../../shared/types';
 
 export const api = new Hono<AppEnv>();
@@ -99,6 +100,9 @@ api.use('/registrations/*', liffAuth);
 api.use('/transfer-invites/*', liffAuth);
 api.use('/context/*', liffAuth);
 api.use('/group/*', liffAuth);
+api.use('/preorders/*', liffAuth);
+
+api.route('/', preorderRoutes);
 
 /**
  * Refresh an expired group context when HMAC is still valid and the user is a group member.

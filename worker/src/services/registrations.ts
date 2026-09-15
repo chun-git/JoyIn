@@ -16,6 +16,7 @@ import {
 import { Errors } from '../lib/errors';
 import { nowIso } from '../lib/datetime';
 import { newId, toRegistrationRecord } from '../lib/ids';
+import { assertRegistrationCancelAllowedForPreorders } from './preorders';
 import { getVisibleEvent } from './events';
 
 async function resequenceWaitlist(db: D1Database, eventId: string): Promise<void> {
@@ -202,6 +203,10 @@ export async function cancelRegistration(
   // created_by is audit-only — only current organizer or the LINE participant may cancel.
   if (!isOrganizer && !isParticipant) {
     throw Errors.forbidden('不能取消其他人建立的報名');
+  }
+
+  if (registration.type === 'SELF' && participantId) {
+    await assertRegistrationCancelAllowedForPreorders(db, event.event_id, participantId);
   }
 
   const wasConfirmed = registration.status === 'CONFIRMED';

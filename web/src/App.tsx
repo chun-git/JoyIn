@@ -27,6 +27,9 @@ import { EventDetailPage } from './pages/EventDetailPage';
 import { EventEditPage } from './pages/EventEditPage';
 import { EventListPage } from './pages/EventListPage';
 import { HelpPage } from './pages/HelpPage';
+import { PreorderEditPage } from './pages/PreorderEditPage';
+import { PreorderManagePage } from './pages/PreorderManagePage';
+import { PreorderOrderPage } from './pages/PreorderOrderPage';
 import { TransferInvitePage } from './pages/TransferInvitePage';
 
 function isHelpPath(pathname: string): boolean {
@@ -304,6 +307,38 @@ function LiffApp() {
           element={
             <GroupGate session={session}>
               <EventEditPage session={session} />
+            </GroupGate>
+          }
+        />
+        <Route
+          path="/events/:eventId/preorders/new"
+          element={
+            <GroupGate session={session}>
+              <PreorderEditPage session={session} />
+            </GroupGate>
+          }
+        />
+        <Route
+          path="/preorders/:offerId/edit"
+          element={
+            <GroupGate session={session}>
+              <PreorderEditPage session={session} />
+            </GroupGate>
+          }
+        />
+        <Route
+          path="/preorders/:offerId"
+          element={
+            <GroupGate session={session} allowMissingContext>
+              <PreorderOrderPage session={session} />
+            </GroupGate>
+          }
+        />
+        <Route
+          path="/preorders/:offerId/manage"
+          element={
+            <GroupGate session={session}>
+              <PreorderManagePage session={session} />
             </GroupGate>
           }
         />

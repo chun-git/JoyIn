@@ -174,3 +174,151 @@ export interface ApiErrorBody {
   error: string;
   message: string;
 }
+
+/** Fixed disclaimer shown on all preorder payment UIs. */
+export const PREORDER_PAYMENT_DISCLAIMER =
+  '商品款由訂購者直接支付代訂者，JoyIn 不代收商品費用。';
+
+export type PreorderOfferStatus = 'OPEN' | 'CLOSED' | 'CANCELLED';
+export type PreorderOrderStatus =
+  | 'PENDING_PAYMENT'
+  | 'PAYMENT_REPORTED'
+  | 'PAYMENT_CONFIRMED'
+  | 'CANCELLED'
+  | 'FULFILLED';
+
+export interface PreorderProductInput {
+  name: string;
+  specification?: string | null;
+  unitPrice: number;
+  quantityLimit?: number | null;
+  sortOrder?: number;
+  isActive?: boolean;
+  /** When editing an existing product. */
+  productId?: string;
+}
+
+export interface PreorderProduct {
+  productId: string;
+  offerId: string;
+  name: string;
+  specification: string | null;
+  unitPrice: number;
+  quantityLimit: number | null;
+  orderedQuantity: number;
+  remainingQuantity: number | null;
+  sortOrder: number;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PreorderOfferSummary {
+  offerId: string;
+  eventId: string;
+  providerLineUserId: string;
+  providerDisplayName: string;
+  title: string;
+  merchantName: string;
+  description: string;
+  orderDeadline: string;
+  paymentInstructions: string;
+  paymentUrl: string | null;
+  status: PreorderOfferStatus;
+  productCount: number;
+  myOrderStatus: PreorderOrderStatus | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PreorderOfferDetail extends PreorderOfferSummary {
+  products: PreorderProduct[];
+  viewer: {
+    canManage: boolean;
+    canOrder: boolean;
+    canCreateOffer: boolean;
+  };
+}
+
+export interface CreatePreorderOfferInput {
+  title: string;
+  merchantName: string;
+  description?: string;
+  orderDeadline: string;
+  paymentInstructions?: string;
+  paymentUrl?: string | null;
+  products: PreorderProductInput[];
+}
+
+export interface UpdatePreorderOfferInput {
+  title?: string;
+  merchantName?: string;
+  description?: string;
+  orderDeadline?: string;
+  paymentInstructions?: string;
+  paymentUrl?: string | null;
+  products?: PreorderProductInput[];
+}
+
+export interface PreorderOrderItemInput {
+  productId: string;
+  quantity: number;
+}
+
+export interface PreorderOrderItem {
+  orderItemId: string;
+  productId: string;
+  productNameSnapshot: string;
+  specificationSnapshot: string | null;
+  unitPriceSnapshot: number;
+  quantity: number;
+  subtotal: number;
+}
+
+export interface PreorderOrder {
+  orderId: string;
+  offerId: string;
+  eventId: string;
+  buyerLineUserId: string;
+  buyerDisplayName: string;
+  status: PreorderOrderStatus;
+  totalAmount: number;
+  cancellationReason: string | null;
+  paymentReportedAt: string | null;
+  paymentConfirmedAt: string | null;
+  fulfilledAt: string | null;
+  items: PreorderOrderItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PreorderProductAggregate {
+  productId: string;
+  name: string;
+  specification: string | null;
+  unitPrice: number;
+  totalQuantity: number;
+  subtotal: number;
+}
+
+export interface PreorderOfferOrderSummary {
+  offerId: string;
+  orderCount: number;
+  totalReceivable: number;
+  countsByStatus: Record<PreorderOrderStatus, number>;
+  productAggregates: PreorderProductAggregate[];
+  orders: PreorderOrder[];
+}
+
+export interface EventPreorderCancelImpact {
+  blocked: boolean;
+  kind: 'buyer_confirmed' | 'provider_has_orders' | null;
+  message: string | null;
+  pendingCancelCount: number;
+}
+
+export interface EventPreorderCancelBlock {
+  kind: 'buyer_confirmed' | 'provider_has_orders';
+  message: string;
+  offerTitles: string[];
+}

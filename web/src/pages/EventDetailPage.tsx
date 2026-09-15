@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { EventDetail, RegistrationRecord, TransferInviteCreated } from '../../../shared/types';
 import { api } from '../api';
@@ -8,9 +8,12 @@ import { CancelRegistrationDialog } from '../components/CancelRegistrationDialog
 import { EventCard } from '../components/EventCard';
 import { InlineHint } from '../components/InlineHint';
 import { JoinHelpSheet } from '../components/JoinHelpSheet';
+import { PreorderSection } from '../components/PreorderSection';
 import { SiteNav } from '../components/SiteNav';
 import { StateBlock } from '../components/StateBlock';
 import type { LiffSession } from '../liff';
+import type { EventPreorderCancelImpact } from '../../../shared/types';
+import { usePolling } from '../use-polling';
 
 function BackToListButton({ onClick }: { onClick: () => void }) {
   return (
@@ -116,12 +119,32 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
   const [cancelTarget, setCancelTarget] = useState<RegistrationRecord | null>(null);
   const [cancelPending, setCancelPending] = useState(false);
   const [cancelError, setCancelError] = useState('');
+  const [cancelImpact, setCancelImpact] = useState<EventPreorderCancelImpact | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [syncHint, setSyncHint] = useState('');
+  const [editingProxy, setEditingProxy] = useState(false);
 
   async function reload() {
     const result = await api.getEvent(session, eventId);
     setEvent(result.event);
   }
+
+  const pollEvent = useCallback(
+    async (signal: AbortSignal) => {
+      const result = await api.getEvent(session, eventId);
+      if (signal.aborted) return;
+      setEvent(result.event);
+    },
+    [session, eventId],
+  );
+
+  usePolling(pollEvent, {
+    intervalMs: 15_000,
+    enabled: Boolean(event) && !cancelTarget,
+    pauseWhen: editingProxy || cancelPending || pending,
+    onConsecutiveFailures: () => setSyncHint('名單同步暫時失敗，仍顯示目前資料'),
+    onRecovered: () => setSyncHint(''),
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -165,8 +188,30 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
     }
   }
 
+  async function openCancel(item: RegistrationRecord) {
+    if (isHistory) return;
+    setCancelError('');
+    setCancelImpact(null);
+    setCancelTarget(item);
+    const isSelf =
+      item.type === 'SELF' &&
+      (item.participantLineUserId === session.lineUserId ||
+        item.lineUserId === session.lineUserId);
+    if (!isSelf) return;
+    try {
+      const impact = await api.preorderCancelCheck(session, eventId);
+      setCancelImpact(impact);
+    } catch {
+      // Backend will still enforce on confirm.
+    }
+  }
+
   async function confirmCancel() {
     if (!cancelTarget || cancelPending) return;
+    if (cancelImpact?.blocked) {
+      setCancelError(cancelImpact.message || '目前無法取消報名');
+      return;
+    }
     setCancelPending(true);
     setCancelError('');
     try {
@@ -174,6 +219,7 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
       await reload();
       setNotice(cancelTarget.status === 'WAITLIST' ? '已取消候補' : '已取消報名');
       setCancelTarget(null);
+      setCancelImpact(null);
     } catch (err) {
       setCancelError(err instanceof Error ? err.message : '取消失敗');
     } finally {
@@ -228,6 +274,7 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
         </section>
       ) : null}
       {notice ? <div className="toast">{notice}</div> : null}
+      {syncHint ? <p className="hint">{syncHint}</p> : null}
       {error ? <StateBlock kind="error" title="操作失敗">{error}</StateBlock> : null}
 
       <EventCard event={event} history={isHistory} />
@@ -251,9 +298,7 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
           )
         }
         onRequestCancel={(item) => {
-          if (isHistory) return;
-          setCancelError('');
-          setCancelTarget(item);
+          void openCancel(item);
         }}
       />
 
@@ -263,12 +308,12 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
           emptyLabel="目前尚無候補"
           items={event.registrations.waitlist}
           onRequestCancel={(item) => {
-            if (isHistory) return;
-            setCancelError('');
-            setCancelTarget(item);
+            void openCancel(item);
           }}
         />
       ) : null}
+
+      <PreorderSection session={session} eventId={eventId} readOnly={isHistory} />
 
       {!isHistory ? (
         <section className="panel stack">
@@ -297,7 +342,11 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
             <span>{proxyLabel}</span>
             <input
               value={proxyName}
-              onChange={(e) => setProxyName(e.target.value)}
+              onChange={(e) => {
+                setProxyName(e.target.value);
+                setEditingProxy(true);
+              }}
+              onBlur={() => setEditingProxy(false)}
               placeholder="參加者姓名，例如 Amy"
             />
           </label>
@@ -357,7 +406,11 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
               type="button"
               disabled={pending}
               onClick={() => {
-                if (window.confirm('確定要刪除活動嗎？此為軟刪除，列表將不再顯示。')) {
+                if (
+                  window.confirm(
+                    '確定要刪除活動嗎？此為軟刪除，列表將不再顯示。若仍有有效代訂訂單，將無法刪除。',
+                  )
+                ) {
                   void run(async () => {
                     await api.deleteEvent(session, eventId);
                     navigate('/events');
@@ -434,10 +487,12 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
         item={cancelTarget}
         pending={cancelPending}
         error={cancelError}
+        preorderImpact={cancelImpact}
         onDismiss={() => {
           if (cancelPending) return;
           setCancelTarget(null);
           setCancelError('');
+          setCancelImpact(null);
         }}
         onConfirm={() => {
           void confirmCancel();

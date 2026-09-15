@@ -24,6 +24,13 @@ vi.mock('./api', () => ({
     deleteEvent: vi.fn(),
     createTransferInvite: vi.fn(),
     cancelTransferInvites: vi.fn(),
+    listEventPreorders: vi.fn().mockResolvedValue({ offers: [], canCreateOffer: false }),
+    preorderCancelCheck: vi.fn().mockResolvedValue({
+      blocked: false,
+      kind: null,
+      message: null,
+      pendingCancelCount: 0,
+    }),
   },
 }));
 

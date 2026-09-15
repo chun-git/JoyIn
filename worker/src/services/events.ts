@@ -32,6 +32,7 @@ import {
   type RegistrationRow,
 } from '../db/repo';
 import type { AuthUser } from '../env';
+import { assertEventDeleteAllowedForPreorders } from './preorders';
 import {
   resolvePreselectedMembers,
   resolvePreselectedProxyNames,
@@ -438,6 +439,7 @@ export async function deleteEvent(
   if (row.organizer_line_user_id !== user.lineUserId) {
     throw Errors.forbidden('只有主揪可以刪除活動');
   }
+  await assertEventDeleteAllowedForPreorders(db, eventId);
   await setEventStatus(db, eventId, 'DELETED', nowIso());
 }
 

@@ -23,6 +23,13 @@ export interface AuthUser {
 export interface AppVariables {
   user: AuthUser;
   groupId: string;
+  requestId?: string;
+  preorderMeta?: {
+    operation: string;
+    offerPresent?: boolean | null;
+    orderPresent?: boolean | null;
+    idempotencyHit?: boolean | null;
+  };
 }
 
 export type AppEnv = {

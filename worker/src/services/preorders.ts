@@ -1,0 +1,1126 @@
+import type {
+  CreatePreorderOfferInput,
+  PreorderOfferDetail,
+  PreorderOfferOrderSummary,
+  PreorderOfferSummary,
+  PreorderOrder,
+  PreorderOrderItem,
+  PreorderOrderItemInput,
+  PreorderOrderStatus,
+  PreorderProduct,
+  PreorderProductInput,
+  UpdatePreorderOfferInput,
+} from '../../../shared/types';
+import { PREORDER_PAYMENT_DISCLAIMER } from '../../../shared/types';
+import type { AuthUser } from '../env';
+import {
+  adjustProductOrderedQuantity,
+  cancelEmptyOffersForProvider,
+  cancelOpenOrdersForBuyerOnEvent,
+  countActiveOrdersForEvent,
+  countActiveOrdersForEventOffersByProvider,
+  countActiveOrdersForOffer,
+  countActiveProducts,
+  countConfirmedPaymentOrdersForEventBuyer,
+  countOrderItemsForProduct,
+  deactivatePreorderProduct,
+  deletePreorderOrderItems,
+  deletePreorderProductIfUnused,
+  getActiveOrderForBuyer,
+  getPreorderOffer,
+  getPreorderOrder,
+  getPreorderProduct,
+  insertOrderStatusHistory,
+  insertPreorderOffer,
+  insertPreorderOrder,
+  insertPreorderOrderItem,
+  insertPreorderProduct,
+  listPreorderOffersForEvent,
+  listPreorderOrderItems,
+  listPreorderOrderItemsForOrders,
+  listPreorderOrdersForOffer,
+  listPreorderProducts,
+  prepareInsertPreorderProduct,
+  remainingQuantity,
+  setPreorderOfferStatus,
+  updatePreorderOfferRow,
+  updatePreorderOrderRow,
+  updatePreorderProductRow,
+  type PreorderOfferRow,
+  type PreorderOrderItemRow,
+  type PreorderOrderRow,
+  type PreorderProductRow,
+} from '../db/preorder-repo';
+import { findSelfRegistration } from '../db/repo';
+import { Errors } from '../lib/errors';
+import { isExpired, nowIso } from '../lib/datetime';
+import { newId } from '../lib/ids';
+import { getReadableEvent, getVisibleEvent } from './events';
+
+function endAtOf(row: { end_at: string | null; event_at: string }): string {
+  return row.end_at || row.event_at;
+}
+
+function startAtOf(row: { start_at: string | null; event_at: string }): string {
+  return row.start_at || row.event_at;
+}
+
+export async function requireConfirmedSelfRegistration(
+  db: D1Database,
+  eventId: string,
+  lineUserId: string,
+): Promise<void> {
+  const reg = await findSelfRegistration(db, eventId, lineUserId);
+  if (!reg) {
+    throw Errors.forbidden('尚未報名此活動，無法使用代訂功能');
+  }
+  if (reg.status === 'WAITLIST') {
+    throw Errors.forbidden('候補狀態不可建立或訂購代訂');
+  }
+  if (reg.status !== 'CONFIRMED') {
+    throw Errors.forbidden('只有正式報名的 LINE 會員可以使用代訂功能');
+  }
+}
+
+function assertHttpsUrl(value: string | null | undefined, field: string): string | null {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string') throw Errors.validation(`${field}無效`);
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw Errors.validation(`${field}必須是有效的 HTTPS 網址`);
+  }
+  if (url.protocol !== 'https:') {
+    throw Errors.validation(`${field}只接受 HTTPS`);
+  }
+  return trimmed;
+}
+
+function parseDeadline(value: string, eventStartAt: string, now = new Date()): string {
+  const trimmed = (value || '').trim();
+  const ms = Date.parse(trimmed);
+  if (!Number.isFinite(ms)) {
+    throw Errors.validation('訂購截止時間格式無效');
+  }
+  const iso = new Date(ms).toISOString();
+  if (ms <= now.getTime()) {
+    throw Errors.validation('訂購截止時間必須晚於現在');
+  }
+  if (ms > Date.parse(eventStartAt)) {
+    throw Errors.validation('訂購截止時間不可晚於活動開始時間');
+  }
+  return iso;
+}
+
+function normalizeProducts(inputs: PreorderProductInput[]): Array<{
+  productId?: string;
+  name: string;
+  specification: string | null;
+  unitPrice: number;
+  quantityLimit: number | null;
+  sortOrder: number;
+  isActive: boolean;
+}> {
+  if (!Array.isArray(inputs) || inputs.length === 0) {
+    throw Errors.validation('至少需要一個商品');
+  }
+  return inputs.map((raw, index) => {
+    const name = (raw.name || '').trim();
+    if (!name || name.length > 80) throw Errors.validation('商品名稱長度需為 1 到 80 字');
+    const specification =
+      raw.specification == null || String(raw.specification).trim() === ''
+        ? null
+        : String(raw.specification).trim().slice(0, 80);
+    const unitPrice = Number(raw.unitPrice);
+    if (!Number.isInteger(unitPrice) || unitPrice < 0) {
+      throw Errors.validation('商品單價需為大於等於 0 的整數');
+    }
+    let quantityLimit: number | null = null;
+    if (raw.quantityLimit != null && raw.quantityLimit !== ('' as unknown)) {
+      const limit = Number(raw.quantityLimit);
+      if (!Number.isInteger(limit) || limit < 1) {
+        throw Errors.validation('商品數量上限需為大於等於 1 的整數');
+      }
+      quantityLimit = limit;
+    }
+    return {
+      productId: raw.productId?.trim() || undefined,
+      name,
+      specification,
+      unitPrice,
+      quantityLimit,
+      sortOrder: Number.isInteger(raw.sortOrder) ? Number(raw.sortOrder) : index,
+      isActive: raw.isActive !== false,
+    };
+  });
+}
+
+function toProduct(row: PreorderProductRow): PreorderProduct {
+  return {
+    productId: row.product_id,
+    offerId: row.offer_id,
+    name: row.name,
+    specification: row.specification,
+    unitPrice: Number(row.unit_price),
+    quantityLimit: row.quantity_limit == null ? null : Number(row.quantity_limit),
+    orderedQuantity: Number(row.ordered_quantity),
+    remainingQuantity: remainingQuantity(row),
+    sortOrder: Number(row.sort_order),
+    isActive: Boolean(row.is_active),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function toOrderItem(row: PreorderOrderItemRow): PreorderOrderItem {
+  return {
+    orderItemId: row.order_item_id,
+    productId: row.product_id,
+    productNameSnapshot: row.product_name_snapshot,
+    specificationSnapshot: row.specification_snapshot,
+    unitPriceSnapshot: Number(row.unit_price_snapshot),
+    quantity: Number(row.quantity),
+    subtotal: Number(row.subtotal),
+  };
+}
+
+async function toOrder(db: D1Database, row: PreorderOrderRow): Promise<PreorderOrder> {
+  const items = await listPreorderOrderItems(db, row.order_id);
+  return {
+    orderId: row.order_id,
+    offerId: row.offer_id,
+    eventId: row.event_id,
+    buyerLineUserId: row.buyer_line_user_id,
+    buyerDisplayName: row.buyer_display_name,
+    status: row.status,
+    totalAmount: Number(row.total_amount),
+    cancellationReason: row.cancellation_reason,
+    paymentReportedAt: row.payment_reported_at,
+    paymentConfirmedAt: row.payment_confirmed_at,
+    fulfilledAt: row.fulfilled_at,
+    items: items.map(toOrderItem),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function toOfferSummary(
+  db: D1Database,
+  row: PreorderOfferRow,
+  viewerLineUserId: string,
+): Promise<PreorderOfferSummary> {
+  const productCount = await countActiveProducts(db, row.offer_id);
+  const myOrder = await getActiveOrderForBuyer(db, row.offer_id, viewerLineUserId);
+  return {
+    offerId: row.offer_id,
+    eventId: row.event_id,
+    providerLineUserId: row.provider_line_user_id,
+    providerDisplayName: row.provider_display_name,
+    title: row.title,
+    merchantName: row.merchant_name,
+    description: row.description,
+    orderDeadline: row.order_deadline,
+    paymentInstructions: row.payment_instructions || PREORDER_PAYMENT_DISCLAIMER,
+    paymentUrl: row.payment_url,
+    status: row.status,
+    productCount,
+    myOrderStatus: myOrder?.status ?? null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function assertOfferInGroup(
+  db: D1Database,
+  offerId: string,
+  groupId: string,
+): Promise<PreorderOfferRow> {
+  const offer = await getPreorderOffer(db, offerId);
+  if (!offer || offer.group_id !== groupId) {
+    throw Errors.notFound('找不到代訂服務');
+  }
+  return offer;
+}
+
+function assertOfferWritable(offer: PreorderOfferRow, now = new Date()): void {
+  if (offer.status === 'CANCELLED') throw Errors.conflict('代訂已取消');
+  if (offer.status === 'CLOSED') throw Errors.conflict('代訂已關閉');
+  if (isExpired(offer.order_deadline, now)) {
+    throw Errors.conflict('已超過訂購截止時間');
+  }
+}
+
+export async function listEventPreorders(
+  db: D1Database,
+  eventId: string,
+  user: AuthUser,
+  groupId: string,
+): Promise<{ offers: PreorderOfferSummary[]; canCreateOffer: boolean }> {
+  const event = await getReadableEvent(db, eventId, groupId);
+  const ended = isExpired(endAtOf(event));
+  const self = await findSelfRegistration(db, eventId, user.lineUserId);
+  const canCreateOffer = !ended && self?.status === 'CONFIRMED';
+  const rows = await listPreorderOffersForEvent(db, eventId, groupId);
+  const offers = await Promise.all(rows.map((row) => toOfferSummary(db, row, user.lineUserId)));
+  return { offers, canCreateOffer };
+}
+
+export async function createPreorderOffer(
+  db: D1Database,
+  eventId: string,
+  user: AuthUser,
+  groupId: string,
+  input: CreatePreorderOfferInput,
+): Promise<PreorderOfferDetail> {
+  const event = await getVisibleEvent(db, eventId, groupId);
+  await requireConfirmedSelfRegistration(db, eventId, user.lineUserId);
+
+  const title = (input.title || '').trim();
+  if (!title || title.length > 50) throw Errors.validation('服務名稱長度需為 1 到 50 字');
+  const merchantName = (input.merchantName || '').trim();
+  if (!merchantName || merchantName.length > 80) {
+    throw Errors.validation('店家名稱長度需為 1 到 80 字');
+  }
+  const description = (input.description || '').trim().slice(0, 500);
+  const paymentInstructions =
+    (input.paymentInstructions || '').trim().slice(0, 500) || PREORDER_PAYMENT_DISCLAIMER;
+  const paymentUrl = assertHttpsUrl(input.paymentUrl, '付款連結');
+  const orderDeadline = parseDeadline(input.orderDeadline, startAtOf(event));
+  const products = normalizeProducts(input.products);
+
+  const createdAt = nowIso();
+  const offerId = newId();
+  await insertPreorderOffer(db, {
+    offer_id: offerId,
+    event_id: eventId,
+    group_id: groupId,
+    provider_line_user_id: user.lineUserId,
+    provider_display_name: user.displayName,
+    title,
+    merchant_name: merchantName,
+    description,
+    order_deadline: orderDeadline,
+    payment_instructions: paymentInstructions,
+    payment_url: paymentUrl,
+    status: 'OPEN',
+    created_at: createdAt,
+    updated_at: createdAt,
+  });
+
+  const statements = products.map((product, index) =>
+    prepareInsertPreorderProduct(db, {
+      product_id: newId(),
+      offer_id: offerId,
+      name: product.name,
+      specification: product.specification,
+      unit_price: product.unitPrice,
+      quantity_limit: product.quantityLimit,
+      ordered_quantity: 0,
+      sort_order: product.sortOrder ?? index,
+      is_active: product.isActive ? 1 : 0,
+      created_at: createdAt,
+      updated_at: createdAt,
+    }),
+  );
+  if (statements.length > 0) await db.batch(statements);
+
+  return getPreorderOfferDetail(db, offerId, user, groupId);
+}
+
+export async function getPreorderOfferDetail(
+  db: D1Database,
+  offerId: string,
+  user: AuthUser,
+  groupId: string,
+): Promise<PreorderOfferDetail> {
+  const offer = await assertOfferInGroup(db, offerId, groupId);
+  const event = await getReadableEvent(db, offer.event_id, groupId);
+  const ended = isExpired(endAtOf(event));
+  const self = await findSelfRegistration(db, offer.event_id, user.lineUserId);
+  const summary = await toOfferSummary(db, offer, user.lineUserId);
+  const products = (await listPreorderProducts(db, offerId)).map(toProduct);
+  const canManage = offer.provider_line_user_id === user.lineUserId;
+  const canOrder =
+    !ended &&
+    offer.status === 'OPEN' &&
+    !isExpired(offer.order_deadline) &&
+    self?.status === 'CONFIRMED';
+  return {
+    ...summary,
+    products: canManage ? products : products.filter((p) => p.isActive),
+    viewer: {
+      canManage,
+      canOrder,
+      canCreateOffer: !ended && self?.status === 'CONFIRMED',
+    },
+  };
+}
+
+export async function updatePreorderOffer(
+  db: D1Database,
+  offerId: string,
+  user: AuthUser,
+  groupId: string,
+  input: UpdatePreorderOfferInput,
+): Promise<PreorderOfferDetail> {
+  const offer = await assertOfferInGroup(db, offerId, groupId);
+  if (offer.provider_line_user_id !== user.lineUserId) {
+    throw Errors.forbidden('無權管理此代訂');
+  }
+  if (offer.status === 'CANCELLED') throw Errors.conflict('代訂服務已取消');
+  const event = await getReadableEvent(db, offer.event_id, groupId);
+  if (isExpired(endAtOf(event))) throw Errors.eventEnded('活動已結束，代訂改為唯讀');
+
+  const updatedAt = nowIso();
+  const title = input.title != null ? input.title.trim() : offer.title;
+  const merchantName = input.merchantName != null ? input.merchantName.trim() : offer.merchant_name;
+  if (!title || title.length > 50) throw Errors.validation('服務名稱長度需為 1 到 50 字');
+  if (!merchantName || merchantName.length > 80) {
+    throw Errors.validation('店家名稱長度需為 1 到 80 字');
+  }
+  const description =
+    input.description != null ? input.description.trim().slice(0, 500) : offer.description;
+  const paymentInstructions =
+    input.paymentInstructions != null
+      ? input.paymentInstructions.trim().slice(0, 500) || PREORDER_PAYMENT_DISCLAIMER
+      : offer.payment_instructions;
+  const paymentUrl =
+    input.paymentUrl !== undefined
+      ? assertHttpsUrl(input.paymentUrl, '付款連結')
+      : offer.payment_url;
+  const orderDeadline =
+    input.orderDeadline != null
+      ? parseDeadline(input.orderDeadline, startAtOf(event))
+      : offer.order_deadline;
+
+  await updatePreorderOfferRow(db, offerId, {
+    title,
+    merchantName,
+    description,
+    orderDeadline,
+    paymentInstructions,
+    paymentUrl,
+    updatedAt,
+  });
+
+  if (input.products) {
+    const products = normalizeProducts(input.products);
+    const existing = await listPreorderProducts(db, offerId);
+    const existingById = new Map(existing.map((p) => [p.product_id, p]));
+    const seen = new Set<string>();
+    for (const [index, product] of products.entries()) {
+      if (product.productId && existingById.has(product.productId)) {
+        seen.add(product.productId);
+        const current = existingById.get(product.productId)!;
+        if (
+          product.quantityLimit != null &&
+          product.quantityLimit < Number(current.ordered_quantity)
+        ) {
+          throw Errors.validation('商品數量上限不可小於已訂數量');
+        }
+        await updatePreorderProductRow(db, product.productId, {
+          name: product.name,
+          specification: product.specification,
+          unitPrice: product.unitPrice,
+          quantityLimit: product.quantityLimit,
+          sortOrder: product.sortOrder ?? index,
+          isActive: product.isActive,
+          updatedAt,
+        });
+      } else {
+        await insertPreorderProduct(db, {
+          product_id: newId(),
+          offer_id: offerId,
+          name: product.name,
+          specification: product.specification,
+          unit_price: product.unitPrice,
+          quantity_limit: product.quantityLimit,
+          ordered_quantity: 0,
+          sort_order: product.sortOrder ?? index,
+          is_active: product.isActive ? 1 : 0,
+          created_at: updatedAt,
+          updated_at: updatedAt,
+        });
+      }
+    }
+    for (const row of existing) {
+      if (!seen.has(row.product_id)) {
+        const used = await countOrderItemsForProduct(db, row.product_id);
+        if (used > 0) {
+          await deactivatePreorderProduct(db, row.product_id, updatedAt);
+        } else {
+          await deletePreorderProductIfUnused(db, row.product_id);
+        }
+      }
+    }
+  }
+
+  return getPreorderOfferDetail(db, offerId, user, groupId);
+}
+
+export async function closePreorderOffer(
+  db: D1Database,
+  offerId: string,
+  user: AuthUser,
+  groupId: string,
+): Promise<PreorderOfferDetail> {
+  const offer = await assertOfferInGroup(db, offerId, groupId);
+  if (offer.provider_line_user_id !== user.lineUserId) {
+    throw Errors.forbidden('無權管理此代訂');
+  }
+  await setPreorderOfferStatus(db, offerId, 'CLOSED', nowIso());
+  return getPreorderOfferDetail(db, offerId, user, groupId);
+}
+
+export async function cancelPreorderOffer(
+  db: D1Database,
+  offerId: string,
+  user: AuthUser,
+  groupId: string,
+): Promise<PreorderOfferDetail> {
+  const offer = await assertOfferInGroup(db, offerId, groupId);
+  if (offer.provider_line_user_id !== user.lineUserId) {
+    throw Errors.forbidden('無權管理此代訂');
+  }
+  const active = await countActiveOrdersForOffer(db, offerId);
+  if (active > 0) {
+    throw Errors.conflict('仍有有效訂單，請先處理訂單後再取消代訂');
+  }
+  await setPreorderOfferStatus(db, offerId, 'CANCELLED', nowIso());
+  return getPreorderOfferDetail(db, offerId, user, groupId);
+}
+
+export async function addPreorderProduct(
+  db: D1Database,
+  offerId: string,
+  user: AuthUser,
+  groupId: string,
+  input: PreorderProductInput,
+): Promise<PreorderProduct> {
+  const offer = await assertOfferInGroup(db, offerId, groupId);
+  if (offer.provider_line_user_id !== user.lineUserId) {
+    throw Errors.forbidden('無權管理此代訂');
+  }
+  const [product] = normalizeProducts([input]);
+  const createdAt = nowIso();
+  const productId = newId();
+  await insertPreorderProduct(db, {
+    product_id: productId,
+    offer_id: offerId,
+    name: product.name,
+    specification: product.specification,
+    unit_price: product.unitPrice,
+    quantity_limit: product.quantityLimit,
+    ordered_quantity: 0,
+    sort_order: product.sortOrder,
+    is_active: product.isActive ? 1 : 0,
+    created_at: createdAt,
+    updated_at: createdAt,
+  });
+  const row = await getPreorderProduct(db, productId);
+  if (!row) throw Errors.notFound('新增商品失敗');
+  return toProduct(row);
+}
+
+export async function updatePreorderProduct(
+  db: D1Database,
+  offerId: string,
+  productId: string,
+  user: AuthUser,
+  groupId: string,
+  input: PreorderProductInput,
+): Promise<PreorderProduct> {
+  const offer = await assertOfferInGroup(db, offerId, groupId);
+  if (offer.provider_line_user_id !== user.lineUserId) {
+    throw Errors.forbidden('無權管理此代訂');
+  }
+  const existing = await getPreorderProduct(db, productId);
+  if (!existing || existing.offer_id !== offerId) throw Errors.notFound('找不到商品');
+  const [product] = normalizeProducts([{ ...input, productId }]);
+  if (product.quantityLimit != null && product.quantityLimit < Number(existing.ordered_quantity)) {
+    throw Errors.validation('商品數量上限不可小於已訂數量');
+  }
+  const updatedAt = nowIso();
+  await updatePreorderProductRow(db, productId, {
+    name: product.name,
+    specification: product.specification,
+    unitPrice: product.unitPrice,
+    quantityLimit: product.quantityLimit,
+    sortOrder: product.sortOrder,
+    isActive: product.isActive,
+    updatedAt,
+  });
+  const row = await getPreorderProduct(db, productId);
+  if (!row) throw Errors.notFound('更新商品失敗');
+  return toProduct(row);
+}
+
+export async function removePreorderProduct(
+  db: D1Database,
+  offerId: string,
+  productId: string,
+  user: AuthUser,
+  groupId: string,
+): Promise<{ deactivated: boolean }> {
+  const offer = await assertOfferInGroup(db, offerId, groupId);
+  if (offer.provider_line_user_id !== user.lineUserId) {
+    throw Errors.forbidden('無權管理此代訂');
+  }
+  const existing = await getPreorderProduct(db, productId);
+  if (!existing || existing.offer_id !== offerId) throw Errors.notFound('找不到商品');
+  const used = await countOrderItemsForProduct(db, productId);
+  if (used > 0) {
+    await deactivatePreorderProduct(db, productId, nowIso());
+    return { deactivated: true };
+  }
+  await deletePreorderProductIfUnused(db, productId);
+  return { deactivated: false };
+}
+
+function buildOrderLines(
+  items: PreorderOrderItemInput[],
+  products: PreorderProductRow[],
+  previousItems: PreorderOrderItemRow[],
+): Array<{
+  productId: string;
+  quantity: number;
+  name: string;
+  specification: string | null;
+  unitPrice: number;
+  subtotal: number;
+}> {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw Errors.validation('請至少選擇一項商品');
+  }
+  const productById = new Map(products.map((p) => [p.product_id, p]));
+  const prevByProduct = new Map(previousItems.map((i) => [i.product_id, i]));
+  const merged = new Map<string, number>();
+  for (const item of items) {
+    const productId = (item.productId || '').trim();
+    const quantity = Number(item.quantity);
+    if (!productId) throw Errors.validation('商品無效');
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      throw Errors.validation('下單數量必須為正整數');
+    }
+    merged.set(productId, (merged.get(productId) || 0) + quantity);
+  }
+  const lines = [];
+  for (const [productId, quantity] of merged) {
+    const product = productById.get(productId);
+    if (!product || !product.is_active) {
+      throw Errors.validation('部分商品已停用或不存在');
+    }
+    const prev = prevByProduct.get(productId);
+    const unitPrice = prev ? Number(prev.unit_price_snapshot) : Number(product.unit_price);
+    const name = prev ? prev.product_name_snapshot : product.name;
+    const specification = prev ? prev.specification_snapshot : product.specification;
+    lines.push({
+      productId,
+      quantity,
+      name,
+      specification,
+      unitPrice,
+      subtotal: unitPrice * quantity,
+    });
+  }
+  return lines;
+}
+
+export async function upsertMyPreorderOrder(
+  db: D1Database,
+  offerId: string,
+  user: AuthUser,
+  groupId: string,
+  items: PreorderOrderItemInput[],
+  idempotencyKey?: string | null,
+): Promise<{ order: PreorderOrder; idempotencyHit: boolean }> {
+  const offer = await assertOfferInGroup(db, offerId, groupId);
+  await getVisibleEvent(db, offer.event_id, groupId);
+  await requireConfirmedSelfRegistration(db, offer.event_id, user.lineUserId);
+  assertOfferWritable(offer);
+
+  const products = await listPreorderProducts(db, offerId);
+  const existing = await getActiveOrderForBuyer(db, offerId, user.lineUserId);
+  if (existing && !['PENDING_PAYMENT', 'PAYMENT_REPORTED'].includes(existing.status)) {
+    throw Errors.conflict('訂單狀態已變更，請重新整理後再試');
+  }
+  if (
+    idempotencyKey &&
+    existing?.idempotency_key &&
+    existing.idempotency_key === idempotencyKey
+  ) {
+    return { order: await toOrder(db, existing), idempotencyHit: true };
+  }
+
+  const previousItems = existing ? await listPreorderOrderItems(db, existing.order_id) : [];
+  const lines = buildOrderLines(items, products, previousItems);
+  const totalAmount = lines.reduce((sum, line) => sum + line.subtotal, 0);
+  const updatedAt = nowIso();
+
+  const prevQty = new Map(previousItems.map((i) => [i.product_id, Number(i.quantity)]));
+  const nextQty = new Map(lines.map((i) => [i.productId, i.quantity]));
+  const allProductIds = new Set([...prevQty.keys(), ...nextQty.keys()]);
+  for (const productId of allProductIds) {
+    const delta = (nextQty.get(productId) || 0) - (prevQty.get(productId) || 0);
+    const ok = await adjustProductOrderedQuantity(db, productId, delta, updatedAt);
+    if (!ok) {
+      // rollback already applied deltas
+      for (const rolled of allProductIds) {
+        if (rolled === productId) break;
+        const d = (nextQty.get(rolled) || 0) - (prevQty.get(rolled) || 0);
+        if (d !== 0) await adjustProductOrderedQuantity(db, rolled, -d, updatedAt);
+      }
+      throw Errors.conflict('商品數量不足，請調整後再試');
+    }
+  }
+
+  let orderId = existing?.order_id;
+  if (!existing) {
+    orderId = newId();
+    try {
+      await insertPreorderOrder(db, {
+        order_id: orderId,
+        offer_id: offerId,
+        event_id: offer.event_id,
+        group_id: groupId,
+        buyer_line_user_id: user.lineUserId,
+        buyer_display_name: user.displayName,
+        status: 'PENDING_PAYMENT',
+        total_amount: totalAmount,
+        cancellation_reason: null,
+        payment_reported_at: null,
+        payment_confirmed_at: null,
+        fulfilled_at: null,
+        idempotency_key: idempotencyKey?.trim() || null,
+        created_at: updatedAt,
+        updated_at: updatedAt,
+      });
+      await insertOrderStatusHistory(db, {
+        historyId: newId(),
+        orderId,
+        fromStatus: null,
+        toStatus: 'PENDING_PAYMENT',
+        changedByLineUserId: user.lineUserId,
+        reason: null,
+        createdAt: updatedAt,
+      });
+    } catch (error) {
+      for (const productId of allProductIds) {
+        const delta = (nextQty.get(productId) || 0) - (prevQty.get(productId) || 0);
+        if (delta !== 0) await adjustProductOrderedQuantity(db, productId, -delta, updatedAt);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('UNIQUE') || message.includes('unique')) {
+        throw Errors.conflict('你在此代訂已有訂單，請重新整理');
+      }
+      throw error;
+    }
+  } else {
+    await updatePreorderOrderRow(db, existing.order_id, {
+      status: existing.status,
+      totalAmount,
+      cancellationReason: null,
+      paymentReportedAt: existing.payment_reported_at,
+      paymentConfirmedAt: existing.payment_confirmed_at,
+      fulfilledAt: existing.fulfilled_at,
+      updatedAt,
+    });
+    await deletePreorderOrderItems(db, existing.order_id);
+  }
+
+  for (const line of lines) {
+    await insertPreorderOrderItem(db, {
+      order_item_id: newId(),
+      order_id: orderId!,
+      product_id: line.productId,
+      product_name_snapshot: line.name,
+      specification_snapshot: line.specification,
+      unit_price_snapshot: line.unitPrice,
+      quantity: line.quantity,
+      subtotal: line.subtotal,
+      created_at: updatedAt,
+    });
+  }
+
+  const row = await getPreorderOrder(db, orderId!);
+  if (!row) throw Errors.notFound('建立訂單失敗');
+  return { order: await toOrder(db, row), idempotencyHit: false };
+}
+
+export async function getMyPreorderOrder(
+  db: D1Database,
+  offerId: string,
+  user: AuthUser,
+  groupId: string,
+): Promise<PreorderOrder | null> {
+  await assertOfferInGroup(db, offerId, groupId);
+  const row = await getActiveOrderForBuyer(db, offerId, user.lineUserId);
+  if (!row) return null;
+  return toOrder(db, row);
+}
+
+export async function reportMyPreorderPayment(
+  db: D1Database,
+  offerId: string,
+  user: AuthUser,
+  groupId: string,
+): Promise<PreorderOrder> {
+  await assertOfferInGroup(db, offerId, groupId);
+  const order = await getActiveOrderForBuyer(db, offerId, user.lineUserId);
+  if (!order) throw Errors.notFound('找不到訂單');
+  if (order.status !== 'PENDING_PAYMENT') {
+    throw Errors.conflict('目前狀態無法回報付款');
+  }
+  const updatedAt = nowIso();
+  await updatePreorderOrderRow(db, order.order_id, {
+    status: 'PAYMENT_REPORTED',
+    totalAmount: order.total_amount,
+    cancellationReason: null,
+    paymentReportedAt: updatedAt,
+    paymentConfirmedAt: order.payment_confirmed_at,
+    fulfilledAt: order.fulfilled_at,
+    updatedAt,
+  });
+  await insertOrderStatusHistory(db, {
+    historyId: newId(),
+    orderId: order.order_id,
+    fromStatus: order.status,
+    toStatus: 'PAYMENT_REPORTED',
+    changedByLineUserId: user.lineUserId,
+    reason: null,
+    createdAt: updatedAt,
+  });
+  return toOrder(db, (await getPreorderOrder(db, order.order_id))!);
+}
+
+export async function cancelMyPreorderOrder(
+  db: D1Database,
+  offerId: string,
+  user: AuthUser,
+  groupId: string,
+  reason?: string,
+): Promise<PreorderOrder> {
+  await assertOfferInGroup(db, offerId, groupId);
+  const order = await getActiveOrderForBuyer(db, offerId, user.lineUserId);
+  if (!order) throw Errors.notFound('找不到訂單');
+  if (order.status === 'PAYMENT_CONFIRMED' || order.status === 'FULFILLED') {
+    throw Errors.conflict('已確認付款不可自行取消，請聯絡代訂者處理');
+  }
+  if (!['PENDING_PAYMENT', 'PAYMENT_REPORTED'].includes(order.status)) {
+    throw Errors.conflict('目前狀態無法取消訂單');
+  }
+  const updatedAt = nowIso();
+  const items = await listPreorderOrderItems(db, order.order_id);
+  for (const item of items) {
+    await adjustProductOrderedQuantity(db, item.product_id, -item.quantity, updatedAt);
+  }
+  await updatePreorderOrderRow(db, order.order_id, {
+    status: 'CANCELLED',
+    totalAmount: order.total_amount,
+    cancellationReason: (reason || '').trim().slice(0, 200) || '買家取消',
+    paymentReportedAt: order.payment_reported_at,
+    paymentConfirmedAt: order.payment_confirmed_at,
+    fulfilledAt: order.fulfilled_at,
+    updatedAt,
+  });
+  await insertOrderStatusHistory(db, {
+    historyId: newId(),
+    orderId: order.order_id,
+    fromStatus: order.status,
+    toStatus: 'CANCELLED',
+    changedByLineUserId: user.lineUserId,
+    reason: (reason || '').trim().slice(0, 200) || '買家取消',
+    createdAt: updatedAt,
+  });
+  return toOrder(db, (await getPreorderOrder(db, order.order_id))!);
+}
+
+async function requireProviderOrder(
+  db: D1Database,
+  offerId: string,
+  orderId: string,
+  user: AuthUser,
+  groupId: string,
+): Promise<{ offer: PreorderOfferRow; order: PreorderOrderRow }> {
+  const offer = await assertOfferInGroup(db, offerId, groupId);
+  if (offer.provider_line_user_id !== user.lineUserId) {
+    throw Errors.forbidden('無權管理此代訂');
+  }
+  const order = await getPreorderOrder(db, orderId);
+  if (!order || order.offer_id !== offerId) throw Errors.notFound('找不到訂單');
+  return { offer, order };
+}
+
+export async function confirmPreorderPayment(
+  db: D1Database,
+  offerId: string,
+  orderId: string,
+  user: AuthUser,
+  groupId: string,
+): Promise<PreorderOrder> {
+  const { order } = await requireProviderOrder(db, offerId, orderId, user, groupId);
+  if (order.status !== 'PAYMENT_REPORTED' && order.status !== 'PENDING_PAYMENT') {
+    throw Errors.conflict('目前狀態無法確認收款');
+  }
+  const updatedAt = nowIso();
+  await updatePreorderOrderRow(db, order.order_id, {
+    status: 'PAYMENT_CONFIRMED',
+    totalAmount: order.total_amount,
+    cancellationReason: null,
+    paymentReportedAt: order.payment_reported_at || updatedAt,
+    paymentConfirmedAt: updatedAt,
+    fulfilledAt: order.fulfilled_at,
+    updatedAt,
+  });
+  await insertOrderStatusHistory(db, {
+    historyId: newId(),
+    orderId: order.order_id,
+    fromStatus: order.status,
+    toStatus: 'PAYMENT_CONFIRMED',
+    changedByLineUserId: user.lineUserId,
+    reason: null,
+    createdAt: updatedAt,
+  });
+  return toOrder(db, (await getPreorderOrder(db, order.order_id))!);
+}
+
+export async function fulfillPreorderOrder(
+  db: D1Database,
+  offerId: string,
+  orderId: string,
+  user: AuthUser,
+  groupId: string,
+): Promise<PreorderOrder> {
+  const { order } = await requireProviderOrder(db, offerId, orderId, user, groupId);
+  if (order.status !== 'PAYMENT_CONFIRMED') {
+    throw Errors.conflict('請先確認收款後再標記完成');
+  }
+  const updatedAt = nowIso();
+  await updatePreorderOrderRow(db, order.order_id, {
+    status: 'FULFILLED',
+    totalAmount: order.total_amount,
+    cancellationReason: null,
+    paymentReportedAt: order.payment_reported_at,
+    paymentConfirmedAt: order.payment_confirmed_at,
+    fulfilledAt: updatedAt,
+    updatedAt,
+  });
+  await insertOrderStatusHistory(db, {
+    historyId: newId(),
+    orderId: order.order_id,
+    fromStatus: order.status,
+    toStatus: 'FULFILLED',
+    changedByLineUserId: user.lineUserId,
+    reason: null,
+    createdAt: updatedAt,
+  });
+  return toOrder(db, (await getPreorderOrder(db, order.order_id))!);
+}
+
+export async function cancelPreorderOrderByProvider(
+  db: D1Database,
+  offerId: string,
+  orderId: string,
+  user: AuthUser,
+  groupId: string,
+  reason: string,
+): Promise<PreorderOrder> {
+  const { order } = await requireProviderOrder(db, offerId, orderId, user, groupId);
+  if (order.status === 'CANCELLED') throw Errors.conflict('訂單已取消');
+  const trimmed = (reason || '').trim();
+  if (!trimmed) throw Errors.validation('請填寫取消原因');
+  const updatedAt = nowIso();
+  const items = await listPreorderOrderItems(db, order.order_id);
+  for (const item of items) {
+    await adjustProductOrderedQuantity(db, item.product_id, -item.quantity, updatedAt);
+  }
+  await updatePreorderOrderRow(db, order.order_id, {
+    status: 'CANCELLED',
+    totalAmount: order.total_amount,
+    cancellationReason: trimmed.slice(0, 200),
+    paymentReportedAt: order.payment_reported_at,
+    paymentConfirmedAt: order.payment_confirmed_at,
+    fulfilledAt: order.fulfilled_at,
+    updatedAt,
+  });
+  await insertOrderStatusHistory(db, {
+    historyId: newId(),
+    orderId: order.order_id,
+    fromStatus: order.status,
+    toStatus: 'CANCELLED',
+    changedByLineUserId: user.lineUserId,
+    reason: trimmed.slice(0, 200),
+    createdAt: updatedAt,
+  });
+  return toOrder(db, (await getPreorderOrder(db, order.order_id))!);
+}
+
+export async function listPreorderOrders(
+  db: D1Database,
+  offerId: string,
+  user: AuthUser,
+  groupId: string,
+): Promise<PreorderOrder[]> {
+  const offer = await assertOfferInGroup(db, offerId, groupId);
+  if (offer.provider_line_user_id !== user.lineUserId) {
+    throw Errors.forbidden('無權管理此代訂');
+  }
+  const rows = await listPreorderOrdersForOffer(db, offerId);
+  return Promise.all(rows.map((row) => toOrder(db, row)));
+}
+
+export async function getPreorderOfferSummary(
+  db: D1Database,
+  offerId: string,
+  user: AuthUser,
+  groupId: string,
+): Promise<PreorderOfferOrderSummary> {
+  const offer = await assertOfferInGroup(db, offerId, groupId);
+  if (offer.provider_line_user_id !== user.lineUserId) {
+    throw Errors.forbidden('無權管理此代訂');
+  }
+  const orders = await listPreorderOrdersForOffer(db, offerId);
+  const active = orders.filter((o) => o.status !== 'CANCELLED');
+  const items = await listPreorderOrderItemsForOrders(
+    db,
+    active.map((o) => o.order_id),
+  );
+  const countsByStatus: Record<PreorderOrderStatus, number> = {
+    PENDING_PAYMENT: 0,
+    PAYMENT_REPORTED: 0,
+    PAYMENT_CONFIRMED: 0,
+    CANCELLED: 0,
+    FULFILLED: 0,
+  };
+  for (const order of orders) countsByStatus[order.status] += 1;
+
+  const aggregateMap = new Map<
+    string,
+    {
+      productId: string;
+      name: string;
+      specification: string | null;
+      unitPrice: number;
+      totalQuantity: number;
+      subtotal: number;
+    }
+  >();
+  for (const item of items) {
+    const key = item.product_id;
+    const current = aggregateMap.get(key) || {
+      productId: item.product_id,
+      name: item.product_name_snapshot,
+      specification: item.specification_snapshot,
+      unitPrice: Number(item.unit_price_snapshot),
+      totalQuantity: 0,
+      subtotal: 0,
+    };
+    current.totalQuantity += Number(item.quantity);
+    current.subtotal += Number(item.subtotal);
+    aggregateMap.set(key, current);
+  }
+
+  const receivableStatuses: PreorderOrderStatus[] = [
+    'PENDING_PAYMENT',
+    'PAYMENT_REPORTED',
+    'PAYMENT_CONFIRMED',
+    'FULFILLED',
+  ];
+  const totalReceivable = active
+    .filter((o) => receivableStatuses.includes(o.status))
+    .reduce((sum, o) => sum + Number(o.total_amount), 0);
+
+  return {
+    offerId,
+    orderCount: active.length,
+    totalReceivable,
+    countsByStatus,
+    productAggregates: [...aggregateMap.values()],
+    orders: await Promise.all(orders.map((row) => toOrder(db, row))),
+  };
+}
+
+/** Used by cancelRegistration — throws if blocked. */
+export async function assertRegistrationCancelAllowedForPreorders(
+  db: D1Database,
+  eventId: string,
+  lineUserId: string,
+): Promise<{ cancelledOrderIds: string[] }> {
+  const confirmedPaid = await countConfirmedPaymentOrdersForEventBuyer(db, eventId, lineUserId);
+  if (confirmedPaid > 0) {
+    throw Errors.conflict('你仍有已確認付款的代訂訂單，請先聯絡代訂者處理後再取消報名');
+  }
+  const providerBlock = await countActiveOrdersForEventOffersByProvider(db, eventId, lineUserId);
+  if (providerBlock.orderCount > 0) {
+    throw Errors.conflict(
+      `你提供的代訂仍有有效訂單（${providerBlock.offerTitles.join('、')}），請先完成或取消相關訂單`,
+    );
+  }
+  const updatedAt = nowIso();
+  const cancelledOrderIds = await cancelOpenOrdersForBuyerOnEvent(
+    db,
+    eventId,
+    lineUserId,
+    '因取消活動報名而取消訂單',
+    updatedAt,
+  );
+  await cancelEmptyOffersForProvider(db, eventId, lineUserId, updatedAt);
+  return { cancelledOrderIds };
+}
+
+export async function assertEventDeleteAllowedForPreorders(
+  db: D1Database,
+  eventId: string,
+): Promise<void> {
+  const count = await countActiveOrdersForEvent(db, eventId);
+  if (count > 0) {
+    throw Errors.conflict(`此活動仍有 ${count} 筆有效代訂訂單，請先處理後再刪除活動`);
+  }
+}
+
+export async function previewRegistrationCancelPreorderImpact(
+  db: D1Database,
+  eventId: string,
+  lineUserId: string,
+): Promise<{
+  blocked: boolean;
+  kind: 'buyer_confirmed' | 'provider_has_orders' | null;
+  message: string | null;
+  pendingCancelCount: number;
+}> {
+  const confirmedPaid = await countConfirmedPaymentOrdersForEventBuyer(db, eventId, lineUserId);
+  if (confirmedPaid > 0) {
+    return {
+      blocked: true,
+      kind: 'buyer_confirmed',
+      message: '你仍有已確認付款的代訂訂單，請先聯絡代訂者處理後再取消報名',
+      pendingCancelCount: 0,
+    };
+  }
+  const providerBlock = await countActiveOrdersForEventOffersByProvider(db, eventId, lineUserId);
+  if (providerBlock.orderCount > 0) {
+    return {
+      blocked: true,
+      kind: 'provider_has_orders',
+      message: `你提供的代訂仍有有效訂單（${providerBlock.offerTitles.join('、')}），請先完成或取消相關訂單`,
+      pendingCancelCount: 0,
+    };
+  }
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS count FROM preorder_orders
+       WHERE event_id = ? AND buyer_line_user_id = ?
+         AND status IN ('PENDING_PAYMENT', 'PAYMENT_REPORTED')`,
+    )
+    .bind(eventId, lineUserId)
+    .first<{ count: number }>();
+  return {
+    blocked: false,
+    kind: null,
+    message: null,
+    pendingCancelCount: row?.count ?? 0,
+  };
+}

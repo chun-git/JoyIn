@@ -1184,3 +1184,150 @@ section h2 { margin: 0 0 10px; font-size: 18px; }
   }
 }
 
+
+/* —— Preorder (代訂) —— */
+.preorder-section {
+  width: 100%;
+  min-width: 0;
+}
+.preorder-offer-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  width: 100%;
+}
+@media (min-width: 768px) {
+  .preorder-offer-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.preorder-offer-card,
+.preorder-order-card,
+.preorder-product-editor,
+.preorder-product-line,
+.preorder-payment-box,
+.preorder-stat {
+  width: 100%;
+  min-width: 0;
+  background: var(--card, #ffffff);
+  border: 1px solid color-mix(in srgb, var(--brand) 16%, transparent);
+  border-radius: 14px;
+  padding: 12px;
+  box-sizing: border-box;
+}
+.preorder-offer-card-head,
+.preorder-product-line,
+.preorder-total-row,
+.section-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.preorder-offer-title,
+.preorder-wrap {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.preorder-status {
+  flex: 0 0 auto;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.preorder-status.tone-pending,
+.preorder-my-order.tone-pending {
+  color: #c45c12;
+}
+.preorder-status.tone-reported,
+.preorder-my-order.tone-reported {
+  color: #b86a00;
+}
+.preorder-status.tone-confirmed,
+.preorder-status.tone-fulfilled,
+.preorder-status.tone-open,
+.preorder-my-order.tone-confirmed,
+.preorder-my-order.tone-fulfilled {
+  color: #1b7a45;
+}
+.preorder-status.tone-cancelled,
+.preorder-status.tone-closed,
+.preorder-my-order.tone-cancelled {
+  color: #9aa3ad;
+}
+.preorder-card-actions,
+.preorder-actions,
+.preorder-qty-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+}
+.preorder-card-actions .btn,
+.preorder-actions .btn {
+  max-width: 100%;
+}
+.preorder-product-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+.preorder-product-line-main {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+.preorder-qty-value {
+  min-width: 1.5rem;
+  text-align: center;
+  font-weight: 700;
+  color: #12324a;
+}
+.preorder-line-subtotal {
+  flex: 0 0 auto;
+  font-weight: 700;
+  color: #12324a;
+}
+.preorder-total-row {
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--brand) 16%, transparent);
+  color: #12324a;
+}
+.preorder-payment-box {
+  background: #f5fbff;
+}
+.preorder-payment-box p {
+  margin: 6px 0 0;
+  color: #12324a;
+}
+.preorder-summary-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 4px;
+}
+.preorder-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+@media (min-width: 768px) {
+  .preorder-stats-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+.preorder-stat strong {
+  display: block;
+  font-size: 1.15rem;
+  color: #12324a;
+}
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}

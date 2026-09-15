@@ -1,13 +1,23 @@
 import type {
   CopyEventInput,
   CreateEventInput,
+  CreatePreorderOfferInput,
   EventDetail,
+  EventPreorderCancelImpact,
   EventSummary,
   HistoryEventSummary,
+  PreorderOfferDetail,
+  PreorderOfferOrderSummary,
+  PreorderOfferSummary,
+  PreorderOrder,
+  PreorderOrderItemInput,
+  PreorderProduct,
+  PreorderProductInput,
   PreselectMemberRoster,
   TransferInviteCreated,
   TransferInvitePreview,
   UpdateEventInput,
+  UpdatePreorderOfferInput,
 } from '../../shared/types';
 import { AUTH_EXPIRED_BODY } from './auth-recovery-keys';
 import { buildAuthorizationHeader, describeIdTokenSafe } from './auth-token';
@@ -248,5 +258,100 @@ export const api = {
       session,
       { method: 'POST', body: JSON.stringify({ eventId }) },
       { omitContext: true },
+    ),
+  listEventPreorders: (session: LiffSession, eventId: string) =>
+    request<{ offers: PreorderOfferSummary[]; canCreateOffer: boolean }>(
+      `/api/events/${eventId}/preorders`,
+      session,
+    ),
+  preorderCancelCheck: (session: LiffSession, eventId: string) =>
+    request<EventPreorderCancelImpact>(`/api/events/${eventId}/preorder-cancel-check`, session),
+  createPreorder: (session: LiffSession, eventId: string, input: CreatePreorderOfferInput) =>
+    request<{ offer: PreorderOfferDetail }>(`/api/events/${eventId}/preorders`, session, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  getPreorder: (session: LiffSession, offerId: string) =>
+    request<{ offer: PreorderOfferDetail }>(`/api/preorders/${offerId}`, session),
+  updatePreorder: (session: LiffSession, offerId: string, input: UpdatePreorderOfferInput) =>
+    request<{ offer: PreorderOfferDetail }>(`/api/preorders/${offerId}`, session, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
+  closePreorder: (session: LiffSession, offerId: string) =>
+    request<{ offer: PreorderOfferDetail }>(`/api/preorders/${offerId}/close`, session, {
+      method: 'POST',
+    }),
+  cancelPreorder: (session: LiffSession, offerId: string) =>
+    request<{ offer: PreorderOfferDetail }>(`/api/preorders/${offerId}/cancel`, session, {
+      method: 'POST',
+    }),
+  addPreorderProduct: (session: LiffSession, offerId: string, input: PreorderProductInput) =>
+    request<{ product: PreorderProduct }>(`/api/preorders/${offerId}/products`, session, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  updatePreorderProduct: (
+    session: LiffSession,
+    offerId: string,
+    productId: string,
+    input: PreorderProductInput,
+  ) =>
+    request<{ product: PreorderProduct }>(
+      `/api/preorders/${offerId}/products/${productId}`,
+      session,
+      { method: 'PATCH', body: JSON.stringify(input) },
+    ),
+  deletePreorderProduct: (session: LiffSession, offerId: string, productId: string) =>
+    request<{ deactivated: boolean }>(
+      `/api/preorders/${offerId}/products/${productId}`,
+      session,
+      { method: 'DELETE' },
+    ),
+  listPreorderOrders: (session: LiffSession, offerId: string) =>
+    request<{ orders: PreorderOrder[] }>(`/api/preorders/${offerId}/orders`, session),
+  getPreorderSummary: (session: LiffSession, offerId: string) =>
+    request<{ summary: PreorderOfferOrderSummary }>(`/api/preorders/${offerId}/summary`, session),
+  getMyPreorderOrder: (session: LiffSession, offerId: string) =>
+    request<{ order: PreorderOrder | null }>(`/api/preorders/${offerId}/my-order`, session),
+  upsertMyPreorderOrder: (
+    session: LiffSession,
+    offerId: string,
+    items: PreorderOrderItemInput[],
+    idempotencyKey?: string,
+  ) =>
+    request<{ order: PreorderOrder }>(`/api/preorders/${offerId}/my-order`, session, {
+      method: 'PUT',
+      body: JSON.stringify({ items }),
+      headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+    }),
+  reportMyPreorderPayment: (session: LiffSession, offerId: string) =>
+    request<{ order: PreorderOrder }>(
+      `/api/preorders/${offerId}/my-order/report-payment`,
+      session,
+      { method: 'POST' },
+    ),
+  cancelMyPreorderOrder: (session: LiffSession, offerId: string, reason?: string) =>
+    request<{ order: PreorderOrder }>(`/api/preorders/${offerId}/my-order/cancel`, session, {
+      method: 'POST',
+      body: JSON.stringify({ reason: reason || '' }),
+    }),
+  confirmPreorderPayment: (session: LiffSession, offerId: string, orderId: string) =>
+    request<{ order: PreorderOrder }>(
+      `/api/preorders/${offerId}/orders/${orderId}/confirm-payment`,
+      session,
+      { method: 'POST' },
+    ),
+  fulfillPreorderOrder: (session: LiffSession, offerId: string, orderId: string) =>
+    request<{ order: PreorderOrder }>(
+      `/api/preorders/${offerId}/orders/${orderId}/fulfill`,
+      session,
+      { method: 'POST' },
+    ),
+  cancelPreorderOrder: (session: LiffSession, offerId: string, orderId: string, reason: string) =>
+    request<{ order: PreorderOrder }>(
+      `/api/preorders/${offerId}/orders/${orderId}/cancel`,
+      session,
+      { method: 'POST', body: JSON.stringify({ reason }) },
     ),
 };
