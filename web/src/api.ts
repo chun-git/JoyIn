@@ -4,11 +4,11 @@ import type {
   CreatePreorderOfferInput,
   EventDetail,
   EventPreorderCancelImpact,
+  EventPreorderListResponse,
   EventSummary,
   HistoryEventSummary,
   PreorderOfferDetail,
   PreorderOfferOrderSummary,
-  PreorderOfferSummary,
   PreorderOrder,
   PreorderOrderItemInput,
   PreorderProduct,
@@ -260,10 +260,7 @@ export const api = {
       { omitContext: true },
     ),
   listEventPreorders: (session: LiffSession, eventId: string) =>
-    request<{ offers: PreorderOfferSummary[]; canCreateOffer: boolean }>(
-      `/api/events/${eventId}/preorders`,
-      session,
-    ),
+    request<EventPreorderListResponse>(`/api/events/${eventId}/preorders`, session),
   preorderCancelCheck: (session: LiffSession, eventId: string) =>
     request<EventPreorderCancelImpact>(`/api/events/${eventId}/preorder-cancel-check`, session),
   createPreorder: (session: LiffSession, eventId: string, input: CreatePreorderOfferInput) =>

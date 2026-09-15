@@ -780,7 +780,9 @@ export async function findSelfRegistration(
   const row = await db
     .prepare(
       `SELECT * FROM registrations
-       WHERE event_id = ? AND type = 'SELF' AND line_user_id = ?`,
+       WHERE event_id = ?
+         AND type = 'SELF'
+         AND TRIM(COALESCE(NULLIF(participant_line_user_id, ''), line_user_id, '')) = ?`,
     )
     .bind(eventId, lineUserId)
     .first<RegistrationRow>();

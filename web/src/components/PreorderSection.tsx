@@ -24,7 +24,8 @@ export function PreorderSection({
 }) {
   const headingId = useId();
   const [offers, setOffers] = useState<PreorderOfferSummary[]>([]);
-  const [canCreate, setCanCreate] = useState(false);
+  const [canCreatePreorder, setCanCreatePreorder] = useState(false);
+  const [preorderRestrictionReason, setPreorderRestrictionReason] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [syncHint, setSyncHint] = useState('');
   const [loading, setLoading] = useState(true);
@@ -35,7 +36,8 @@ export function PreorderSection({
       const result = await api.listEventPreorders(session, eventId);
       if (signal?.aborted) return;
       setOffers(result.offers);
-      setCanCreate(result.canCreateOffer);
+      setCanCreatePreorder(result.canCreatePreorder);
+      setPreorderRestrictionReason(result.preorderRestrictionReason);
       setError('');
       setHasLoaded(true);
     },
@@ -121,12 +123,15 @@ export function PreorderSection({
         </div>
       ) : null}
 
-      {!readOnly && canCreate ? (
+      {!readOnly && canCreatePreorder ? (
         <div className="row">
           <Link className="btn" to={`/events/${eventId}/preorders/new`}>
             我要提供代訂
           </Link>
         </div>
+      ) : null}
+      {!readOnly && !canCreatePreorder && preorderRestrictionReason ? (
+        <p className="hint">{preorderRestrictionReason}</p>
       ) : null}
     </section>
   );

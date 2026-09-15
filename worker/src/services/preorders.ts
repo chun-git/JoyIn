@@ -1,5 +1,6 @@
 import type {
   CreatePreorderOfferInput,
+  EventPreorderListResponse,
   PreorderOfferDetail,
   PreorderOfferOrderSummary,
   PreorderOfferSummary,
@@ -9,6 +10,7 @@ import type {
   PreorderOrderStatus,
   PreorderProduct,
   PreorderProductInput,
+  PreorderViewerCapabilities,
   UpdatePreorderOfferInput,
 } from '../../../shared/types';
 import { PREORDER_PAYMENT_DISCLAIMER } from '../../../shared/types';
@@ -80,6 +82,62 @@ export async function requireConfirmedSelfRegistration(
   if (reg.status !== 'CONFIRMED') {
     throw Errors.forbidden('只有正式報名的 LINE 會員可以使用代訂功能');
   }
+}
+
+/** Capability flags for UI — never derived from organizer/provider alone. */
+export function resolvePreorderCapabilities(input: {
+  ended: boolean;
+  selfStatus: string | null | undefined;
+  offerStatus?: string | null;
+  orderDeadline?: string | null;
+  isProvider: boolean;
+  now?: Date;
+}): PreorderViewerCapabilities {
+  const now = input.now ?? new Date();
+  let preorderRestrictionReason: string | null = null;
+  let canCreatePreorder = false;
+  if (input.ended) {
+    preorderRestrictionReason = '活動已結束，代訂改為唯讀';
+  } else if (!input.selfStatus) {
+    preorderRestrictionReason = '尚未報名此活動，無法使用代訂功能';
+  } else if (input.selfStatus === 'WAITLIST') {
+    preorderRestrictionReason = '候補狀態不可建立或訂購代訂';
+  } else if (input.selfStatus !== 'CONFIRMED') {
+    preorderRestrictionReason = '只有正式報名的 LINE 會員可以使用代訂功能';
+  } else {
+    canCreatePreorder = true;
+  }
+
+  const canManagePreorder = input.isProvider;
+  let orderRestrictionReason: string | null = null;
+  let canOrder = false;
+  if (input.ended) {
+    orderRestrictionReason = '活動已結束，無法下單';
+  } else if (!input.selfStatus) {
+    orderRestrictionReason = '尚未報名此活動，無法使用代訂功能';
+  } else if (input.selfStatus === 'WAITLIST') {
+    orderRestrictionReason = '候補狀態不可建立或訂購代訂';
+  } else if (input.selfStatus !== 'CONFIRMED') {
+    orderRestrictionReason = '只有正式報名的 LINE 會員可以使用代訂功能';
+  } else if (input.offerStatus === 'CANCELLED') {
+    orderRestrictionReason = '代訂已取消';
+  } else if (input.offerStatus === 'CLOSED') {
+    orderRestrictionReason = '代訂已關閉';
+  } else if (input.orderDeadline && isExpired(input.orderDeadline, now)) {
+    orderRestrictionReason = '已超過訂購截止時間';
+  } else if (input.offerStatus && input.offerStatus !== 'OPEN') {
+    orderRestrictionReason = '代訂目前不可訂購';
+  } else {
+    canOrder = true;
+  }
+
+  return {
+    canCreatePreorder,
+    canOrder,
+    canManagePreorder,
+    preorderRestrictionReason,
+    orderRestrictionReason,
+  };
 }
 
 function assertHttpsUrl(value: string | null | undefined, field: string): string | null {
@@ -258,14 +316,22 @@ export async function listEventPreorders(
   eventId: string,
   user: AuthUser,
   groupId: string,
-): Promise<{ offers: PreorderOfferSummary[]; canCreateOffer: boolean }> {
+): Promise<EventPreorderListResponse> {
   const event = await getReadableEvent(db, eventId, groupId);
   const ended = isExpired(endAtOf(event));
   const self = await findSelfRegistration(db, eventId, user.lineUserId);
-  const canCreateOffer = !ended && self?.status === 'CONFIRMED';
+  const caps = resolvePreorderCapabilities({
+    ended,
+    selfStatus: self?.status,
+    isProvider: false,
+  });
   const rows = await listPreorderOffersForEvent(db, eventId, groupId);
   const offers = await Promise.all(rows.map((row) => toOfferSummary(db, row, user.lineUserId)));
-  return { offers, canCreateOffer };
+  return {
+    offers,
+    canCreatePreorder: caps.canCreatePreorder,
+    preorderRestrictionReason: caps.preorderRestrictionReason,
+  };
 }
 
 export async function createPreorderOffer(
@@ -342,20 +408,17 @@ export async function getPreorderOfferDetail(
   const self = await findSelfRegistration(db, offer.event_id, user.lineUserId);
   const summary = await toOfferSummary(db, offer, user.lineUserId);
   const products = (await listPreorderProducts(db, offerId)).map(toProduct);
-  const canManage = offer.provider_line_user_id === user.lineUserId;
-  const canOrder =
-    !ended &&
-    offer.status === 'OPEN' &&
-    !isExpired(offer.order_deadline) &&
-    self?.status === 'CONFIRMED';
+  const viewer = resolvePreorderCapabilities({
+    ended,
+    selfStatus: self?.status,
+    offerStatus: offer.status,
+    orderDeadline: offer.order_deadline,
+    isProvider: offer.provider_line_user_id === user.lineUserId,
+  });
   return {
     ...summary,
-    products: canManage ? products : products.filter((p) => p.isActive),
-    viewer: {
-      canManage,
-      canOrder,
-      canCreateOffer: !ended && self?.status === 'CONFIRMED',
-    },
+    products: viewer.canManagePreorder ? products : products.filter((p) => p.isActive),
+    viewer,
   };
 }
 

@@ -28,7 +28,8 @@ describe('preorder UI', () => {
   it('shows empty state and create button when eligible', async () => {
     listEventPreorders.mockResolvedValue({
       offers: [],
-      canCreateOffer: true,
+      canCreatePreorder: true,
+      preorderRestrictionReason: null,
     });
     render(
       <MemoryRouter>

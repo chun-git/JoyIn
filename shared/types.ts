@@ -231,13 +231,24 @@ export interface PreorderOfferSummary {
   updatedAt: string;
 }
 
+/** Explicit viewer capabilities — frontend must not re-derive from roles. */
+export interface PreorderViewerCapabilities {
+  canCreatePreorder: boolean;
+  canOrder: boolean;
+  canManagePreorder: boolean;
+  preorderRestrictionReason: string | null;
+  orderRestrictionReason: string | null;
+}
+
 export interface PreorderOfferDetail extends PreorderOfferSummary {
   products: PreorderProduct[];
-  viewer: {
-    canManage: boolean;
-    canOrder: boolean;
-    canCreateOffer: boolean;
-  };
+  viewer: PreorderViewerCapabilities;
+}
+
+export interface EventPreorderListResponse {
+  offers: PreorderOfferSummary[];
+  canCreatePreorder: boolean;
+  preorderRestrictionReason: string | null;
 }
 
 export interface CreatePreorderOfferInput {

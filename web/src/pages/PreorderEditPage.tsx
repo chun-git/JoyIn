@@ -70,7 +70,7 @@ export function PreorderEditPage({ session }: { session: LiffSession }) {
       .then((result) => {
         if (cancelled) return;
         const offer = result.offer;
-        if (!offer.viewer.canManage) {
+        if (!offer.viewer.canManagePreorder) {
           setError('只有代訂者可以編輯');
           return;
         }

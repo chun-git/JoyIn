@@ -118,6 +118,7 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
   const canEditOrder =
     Boolean(offer?.viewer.canOrder) &&
     (!order || order.status === 'PENDING_PAYMENT' || order.status === 'PAYMENT_REPORTED');
+  const orderRestrictionReason = offer?.viewer.orderRestrictionReason ?? null;
   const canCancelSelf =
     order && (order.status === 'PENDING_PAYMENT' || order.status === 'PAYMENT_REPORTED');
   const confirmedLocked =
@@ -204,7 +205,7 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
             </a>
           ) : null}
         </div>
-        {offer.viewer.canManage ? (
+        {offer.viewer.canManagePreorder ? (
           <Link className="btn secondary" to={`/preorders/${offerId}/manage`}>
             前往代訂管理
           </Link>
@@ -213,6 +214,9 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
 
       <section className="panel stack">
         <h2>商品</h2>
+        {!offer.viewer.canOrder && orderRestrictionReason ? (
+          <p className="hint">{orderRestrictionReason}</p>
+        ) : null}
         {lines.length === 0 ? <p className="hint">目前沒有可訂購商品</p> : null}
         {lines.map(({ product, quantity, unitPrice, subtotal }) => (
           <div className="preorder-product-line" key={product.productId}>
@@ -227,19 +231,23 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
                 {!product.isActive ? ' · 已停用' : ''}
               </div>
             </div>
-            <div className="preorder-qty-controls">
+            <div className="preorder-qty-controls" role="group" aria-label={`${product.name} 數量`}>
               <button
-                className="btn secondary btn-compact"
+                className="btn secondary btn-compact preorder-qty-btn"
                 type="button"
                 disabled={!canEditOrder || quantity <= 0 || pending}
-                onClick={() => setQuantity(product.productId, quantity - 1)}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setQuantity(product.productId, quantity - 1);
+                }}
                 aria-label={`減少 ${product.name}`}
               >
                 −
               </button>
               <span className="preorder-qty-value">{quantity}</span>
               <button
-                className="btn secondary btn-compact"
+                className="btn secondary btn-compact preorder-qty-btn"
                 type="button"
                 disabled={
                   !canEditOrder ||
@@ -250,7 +258,11 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
                       product.remainingQuantity +
                         (order?.items.find((i) => i.productId === product.productId)?.quantity || 0))
                 }
-                onClick={() => setQuantity(product.productId, quantity + 1)}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setQuantity(product.productId, quantity + 1);
+                }}
                 aria-label={`增加 ${product.name}`}
               >
                 +

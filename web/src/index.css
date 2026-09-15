@@ -1265,6 +1265,22 @@ section h2 { margin: 0 0 10px; font-size: 18px; }
   align-items: center;
   width: 100%;
   min-width: 0;
+  position: relative;
+  z-index: 1;
+  touch-action: manipulation;
+}
+.preorder-qty-btn {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 10px 14px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  position: relative;
+  z-index: 2;
+}
+.preorder-product-line {
+  position: relative;
+  z-index: 0;
 }
 .preorder-card-actions .btn,
 .preorder-actions .btn {

@@ -24,7 +24,11 @@ vi.mock('./api', () => ({
     deleteEvent: vi.fn(),
     createTransferInvite: vi.fn(),
     cancelTransferInvites: vi.fn(),
-    listEventPreorders: vi.fn().mockResolvedValue({ offers: [], canCreateOffer: false }),
+    listEventPreorders: vi.fn().mockResolvedValue({
+      offers: [],
+      canCreatePreorder: false,
+      preorderRestrictionReason: '尚未報名此活動，無法使用代訂功能',
+    }),
     preorderCancelCheck: vi.fn().mockResolvedValue({
       blocked: false,
       kind: null,

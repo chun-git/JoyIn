@@ -49,6 +49,122 @@ async function createOffer(
   );
 }
 
+describe('preorder role capabilities (organizer A vs participant B)', () => {
+  it('non-organizer confirmed SELF can create offer and order organizer offer', async () => {
+    const created = await createEvent('U-cap-org', '主揪A', { capacity: 5 });
+    const eventId = created.body.event.eventId;
+    await join('U-cap-org', '主揪A', eventId);
+    await join('U-cap-b', '參加者B', eventId);
+
+    const listB = await json<{
+      canCreatePreorder: boolean;
+      preorderRestrictionReason: string | null;
+    }>(`/api/events/${eventId}/preorders`, {
+      headers: await authHeaders('U-cap-b', '參加者B'),
+    });
+    expect(listB.status).toBe(200);
+    expect(listB.body.canCreatePreorder).toBe(true);
+    expect(listB.body.preorderRestrictionReason).toBeNull();
+
+    const offerA = await createOffer('U-cap-org', '主揪A', eventId, { title: '主揪代訂' });
+    expect(offerA.status).toBe(201);
+    const offerId = offerA.body.offer.offerId;
+    const productId = offerA.body.offer.products[0].productId;
+
+    const detailB = await json<{
+      offer: {
+        viewer: {
+          canCreatePreorder: boolean;
+          canOrder: boolean;
+          canManagePreorder: boolean;
+          orderRestrictionReason: string | null;
+        };
+      };
+    }>(`/api/preorders/${offerId}`, {
+      headers: await authHeaders('U-cap-b', '參加者B'),
+    });
+    expect(detailB.status).toBe(200);
+    expect(detailB.body.offer.viewer.canOrder).toBe(true);
+    expect(detailB.body.offer.viewer.canManagePreorder).toBe(false);
+    expect(detailB.body.offer.viewer.canCreatePreorder).toBe(true);
+    expect(detailB.body.offer.viewer.orderRestrictionReason).toBeNull();
+
+    const orderB = await json(`/api/preorders/${offerId}/my-order`, {
+      method: 'PUT',
+      headers: await authHeaders('U-cap-b', '參加者B'),
+      body: JSON.stringify({ items: [{ productId, quantity: 2 }] }),
+    });
+    expect(orderB.status).toBe(200);
+
+    const offerB = await createOffer('U-cap-b', '參加者B', eventId, { title: 'B的代訂' });
+    expect(offerB.status).toBe(201);
+
+    const detailA = await json<{
+      offer: {
+        viewer: { canOrder: boolean; canManagePreorder: boolean };
+      };
+    }>(`/api/preorders/${offerId}`, {
+      headers: await authHeaders('U-cap-org', '主揪A'),
+    });
+    expect(detailA.body.offer.viewer.canManagePreorder).toBe(true);
+    expect(detailA.body.offer.viewer.canOrder).toBe(true);
+
+    const orderA = await json(`/api/preorders/${offerId}/my-order`, {
+      method: 'PUT',
+      headers: await authHeaders('U-cap-org', '主揪A'),
+      body: JSON.stringify({ items: [{ productId, quantity: 1 }] }),
+    });
+    expect(orderA.status).toBe(200);
+
+    const unreg = await json<{
+      canCreatePreorder: boolean;
+      preorderRestrictionReason: string | null;
+    }>(`/api/events/${eventId}/preorders`, {
+      headers: await authHeaders('U-cap-stranger', '未報名'),
+    });
+    expect(unreg.body.canCreatePreorder).toBe(false);
+    expect(unreg.body.preorderRestrictionReason).toContain('尚未報名');
+  });
+
+  it('matches SELF by participant_line_user_id when line_user_id differs', async () => {
+    const created = await createEvent('U-match-org', '主揪', { capacity: 3 });
+    const eventId = created.body.event.eventId;
+    await join('U-match-org', '主揪', eventId);
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      `INSERT INTO registrations (
+        registration_id, event_id, type, status, waitlist_position,
+        participant_name, line_user_id, created_by_line_user_id,
+        created_by_display_name, created_at, updated_at,
+        registration_source, participant_line_user_id
+      ) VALUES (?, ?, 'SELF', 'CONFIRMED', NULL, ?, ?, ?, ?, ?, ?, 'ORGANIZER_PRESELECT', ?)`,
+    )
+      .bind(
+        'reg-participant-only',
+        eventId,
+        '參加者',
+        'U-legacy-line',
+        'U-match-org',
+        '主揪',
+        now,
+        now,
+        'U-real-participant',
+      )
+      .run();
+
+    const list = await json<{ canCreatePreorder: boolean }>(`/api/events/${eventId}/preorders`, {
+      headers: await authHeaders('U-real-participant', '參加者'),
+    });
+    expect(list.status).toBe(200);
+    expect(list.body.canCreatePreorder).toBe(true);
+
+    const createdOffer = await createOffer('U-real-participant', '參加者', eventId, {
+      title: 'participant-id 代訂',
+    });
+    expect(createdOffer.status).toBe(201);
+  });
+});
+
 describe('preorder MVP', () => {
   it('confirmed registrant can create offer; waitlist/proxy/unregistered cannot', async () => {
     const created = await createEvent('U-org', '主揪', { capacity: 3 });
