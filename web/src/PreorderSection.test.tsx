@@ -61,4 +61,13 @@ describe('preorder UI', () => {
     expect(css).toMatch(/\.preorder-qty-btn[\s\S]*min-width:\s*44px/);
     expect(css).toMatch(/\.preorder-qty-btn[\s\S]*min-height:\s*44px/);
   });
+
+  it('uses an explicit add-to-cart and confirmation flow', () => {
+    expect(orderPageSource).toContain('加入購物車');
+    expect(orderPageSource).toContain('<h2>購物車</h2>');
+    expect(orderPageSource).toContain('確認訂單');
+    expect(orderPageSource).toContain('確認送出');
+    expect(orderPageSource).toContain('normalizedOptionsKey');
+    expect(orderPageSource).toContain('移除');
+  });
 });

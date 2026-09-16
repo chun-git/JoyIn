@@ -143,7 +143,12 @@ describe('shared menus, versions, and preorder snapshots', () => {
       }),
     });
     expect(invalid.status).toBe(400);
-    const order = await json<{ order: { totalAmount: number; items: Array<{ optionPriceSnapshot: number }> } }>(
+    const order = await json<{
+      order: {
+        totalAmount: number;
+        items: Array<{ quantity: number; optionPriceSnapshot: number }>;
+      };
+    }>(
       `/api/preorders/${fromMenu.body.offer.offerId}/my-order`,
       {
         method: 'PUT',
@@ -152,11 +157,29 @@ describe('shared menus, versions, and preorder snapshots', () => {
           items: [
             {
               productId: product.productId,
+              quantity: 1,
+              options: [
+                { optionGroupId: sugar.optionGroupId, optionValueIds: [sugar.values[0].optionValueId] },
+                { optionGroupId: topping.optionGroupId, optionValueIds: [topping.values[0].optionValueId] },
+                { optionGroupId: note.optionGroupId, textValue: 'A 杯' },
+              ],
+            },
+            {
+              productId: product.productId,
+              quantity: 1,
+              options: [
+                { optionGroupId: sugar.optionGroupId, optionValueIds: [sugar.values[1].optionValueId] },
+                { optionGroupId: topping.optionGroupId, optionValueIds: [topping.values[1].optionValueId] },
+                { optionGroupId: note.optionGroupId, textValue: 'B 杯' },
+              ],
+            },
+            {
+              productId: product.productId,
               quantity: 2,
               options: [
                 { optionGroupId: sugar.optionGroupId, optionValueIds: [sugar.values[0].optionValueId] },
-                { optionGroupId: topping.optionGroupId, optionValueIds: topping.values.map((value) => value.optionValueId) },
-                { optionGroupId: note.optionGroupId, textValue: '少一點冰' },
+                { optionGroupId: topping.optionGroupId, optionValueIds: [topping.values[0].optionValueId] },
+                { optionGroupId: note.optionGroupId, textValue: 'A 杯' },
               ],
             },
           ],
@@ -164,8 +187,15 @@ describe('shared menus, versions, and preorder snapshots', () => {
       },
     );
     expect(order.status, JSON.stringify(order.body)).toBe(200);
-    expect(order.body.order.totalAmount).toBe(170);
-    expect(order.body.order.items[0].optionPriceSnapshot).toBe(25);
+    expect(order.body.order.totalAmount).toBe(285);
+    expect(order.body.order.items).toHaveLength(2);
+    expect(order.body.order.items.map((item) => item.quantity).sort()).toEqual([1, 3]);
+    expect(order.body.order.items.map((item) => item.optionPriceSnapshot).sort()).toEqual([10, 15]);
+    const storedProduct = await env.DB
+      .prepare('SELECT ordered_quantity FROM preorder_products WHERE product_id = ?')
+      .bind(product.productId)
+      .first<{ ordered_quantity: number }>();
+    expect(storedProduct?.ordered_quantity).toBe(4);
   });
 });
 

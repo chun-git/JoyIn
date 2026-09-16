@@ -991,8 +991,46 @@ function buildOrderLines(
     throw Errors.validation('請至少選擇一項商品');
   }
   const productById = new Map(products.map((p) => [p.product_id, p]));
-  const prevByProduct = new Map(previousItems.map((i) => [i.product_id, i]));
-  const inputByProduct = new Map<string, PreorderOrderItemInput>();
+  const previousOptionsByItem = new Map<
+    string,
+    Awaited<ReturnType<typeof listPreorderOrderItemOptions>>
+  >();
+  for (const option of previousOptions) {
+    const itemOptions = previousOptionsByItem.get(option.order_item_id) ?? [];
+    itemOptions.push(option);
+    previousOptionsByItem.set(option.order_item_id, itemOptions);
+  }
+  const combinationKey = (
+    productId: string,
+    options: Array<{
+      optionGroupId: string;
+      optionValueId: string | null;
+      textValue: string | null;
+    }>,
+  ) =>
+    `${productId}|${options
+      .map((option) =>
+        option.optionValueId
+          ? `${option.optionGroupId}:v:${option.optionValueId}`
+          : `${option.optionGroupId}:t:${option.textValue ?? ''}`,
+      )
+      .sort()
+      .join('|')}`;
+  const previousByCombination = new Map<string, PreorderOrderItemRow>();
+  for (const item of previousItems) {
+    previousByCombination.set(
+      combinationKey(
+        item.product_id,
+        (previousOptionsByItem.get(item.order_item_id) ?? []).map((option) => ({
+          optionGroupId: option.option_group_id,
+          optionValueId: option.option_value_id,
+          textValue: option.text_value_snapshot,
+        })),
+      ),
+      item,
+    );
+  }
+  const normalizedItems: PreorderOrderItemInput[] = [];
   for (const item of items) {
     const productId = (item.productId || '').trim();
     const quantity = Number(item.quantity);
@@ -1000,22 +1038,41 @@ function buildOrderLines(
     if (!Number.isInteger(quantity) || quantity < 1) {
       throw Errors.validation('下單數量必須為正整數');
     }
-    if (inputByProduct.has(productId)) throw Errors.validation('同一商品不可重複送出');
-    inputByProduct.set(productId, { ...item, productId, quantity });
+    normalizedItems.push({ ...item, productId, quantity });
   }
-  const lines = [];
-  for (const [productId, item] of inputByProduct) {
+  const lines: Array<{
+    productId: string;
+    quantity: number;
+    name: string;
+    specification: string | null;
+    unitPrice: number;
+    optionPrice: number;
+    subtotal: number;
+    options: Array<{
+      optionGroupId: string;
+      optionValueId: string | null;
+      groupName: string;
+      optionName: string;
+      priceAdjustment: number;
+      textValue: string | null;
+    }>;
+  }> = [];
+  const lineByCombination = new Map<string, (typeof lines)[number]>();
+  for (const item of normalizedItems) {
+    const productId = item.productId;
     const quantity = Number(item.quantity);
     const product = productById.get(productId);
     if (!product || !product.is_active) {
       throw Errors.validation('部分商品已停用或不存在');
     }
-    const prev = prevByProduct.get(productId);
-    const unitPrice = prev ? Number(prev.unit_price_snapshot) : Number(product.unit_price);
-    const name = prev ? prev.product_name_snapshot : product.name;
-    const specification = prev ? prev.specification_snapshot : product.specification;
     const groups = optionGroups.filter((group) => group.product_id === productId);
-    const selectedByGroup = new Map((item.options ?? []).map((option) => [option.optionGroupId, option]));
+    const selectedByGroup = new Map<string, NonNullable<PreorderOrderItemInput['options']>[number]>();
+    for (const selected of item.options ?? []) {
+      if (selectedByGroup.has(selected.optionGroupId)) {
+        throw Errors.validation('同一選項群組不可重複送出');
+      }
+      selectedByGroup.set(selected.optionGroupId, selected);
+    }
     const snapshots: Array<{
       optionGroupId: string;
       optionValueId: string | null;
@@ -1058,21 +1115,12 @@ function buildOrderLines(
             candidate.is_active,
         );
         if (!value) throw Errors.validation(`${group.name}包含無效或已停用的選項`);
-        const old = prev
-          ? previousOptions.find(
-              (candidate) =>
-                candidate.order_item_id === prev.order_item_id &&
-                candidate.option_value_id === value.option_value_id,
-            )
-          : null;
         snapshots.push({
           optionGroupId: group.option_group_id,
           optionValueId: value.option_value_id,
-          groupName: old?.group_name_snapshot ?? group.name,
-          optionName: old?.option_name_snapshot ?? value.name,
-          priceAdjustment: old
-            ? Number(old.price_adjustment_snapshot)
-            : Number(value.price_adjustment),
+          groupName: group.name,
+          optionName: value.name,
+          priceAdjustment: Number(value.price_adjustment),
           textValue: null,
         });
       }
@@ -1082,8 +1130,35 @@ function buildOrderLines(
         throw Errors.validation('包含不存在的商品選項');
       }
     }
+    const key = combinationKey(productId, snapshots);
+    const prev = previousByCombination.get(key);
+    if (prev) {
+      const oldOptions = previousOptionsByItem.get(prev.order_item_id) ?? [];
+      for (const snapshot of snapshots) {
+        const old = oldOptions.find(
+          (candidate) =>
+            candidate.option_group_id === snapshot.optionGroupId &&
+            candidate.option_value_id === snapshot.optionValueId &&
+            (candidate.text_value_snapshot ?? '') === (snapshot.textValue ?? ''),
+        );
+        if (old) {
+          snapshot.groupName = old.group_name_snapshot;
+          snapshot.optionName = old.option_name_snapshot;
+          snapshot.priceAdjustment = Number(old.price_adjustment_snapshot);
+        }
+      }
+    }
+    const unitPrice = prev ? Number(prev.unit_price_snapshot) : Number(product.unit_price);
+    const name = prev ? prev.product_name_snapshot : product.name;
+    const specification = prev ? prev.specification_snapshot : product.specification;
     const optionPrice = snapshots.reduce((sum, option) => sum + option.priceAdjustment, 0);
-    lines.push({
+    const duplicate = lineByCombination.get(key);
+    if (duplicate) {
+      duplicate.quantity += quantity;
+      duplicate.subtotal = (duplicate.unitPrice + duplicate.optionPrice) * duplicate.quantity;
+      continue;
+    }
+    const line = {
       productId,
       quantity,
       name,
@@ -1092,7 +1167,9 @@ function buildOrderLines(
       optionPrice,
       subtotal: (unitPrice + optionPrice) * quantity,
       options: snapshots,
-    });
+    };
+    lines.push(line);
+    lineByCombination.set(key, line);
   }
   return lines;
 }
@@ -1147,8 +1224,28 @@ export async function upsertMyPreorderOrder(
   const totalAmount = lines.reduce((sum, line) => sum + line.subtotal, 0);
   const updatedAt = nowIso();
 
-  const prevQty = new Map(previousItems.map((i) => [i.product_id, Number(i.quantity)]));
-  const nextQty = new Map(lines.map((i) => [i.productId, i.quantity]));
+  const sumByProduct = <T>(
+    rows: T[],
+    productIdOf: (row: T) => string,
+    quantityOf: (row: T) => number,
+  ) => {
+    const totals = new Map<string, number>();
+    for (const row of rows) {
+      const productId = productIdOf(row);
+      totals.set(productId, (totals.get(productId) ?? 0) + quantityOf(row));
+    }
+    return totals;
+  };
+  const prevQty = sumByProduct(
+    previousItems,
+    (item) => item.product_id,
+    (item) => Number(item.quantity),
+  );
+  const nextQty = sumByProduct(
+    lines,
+    (line) => line.productId,
+    (line) => line.quantity,
+  );
   const allProductIds = new Set([...prevQty.keys(), ...nextQty.keys()]);
   for (const productId of allProductIds) {
     const delta = (nextQty.get(productId) || 0) - (prevQty.get(productId) || 0);

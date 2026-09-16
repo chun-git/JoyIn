@@ -124,6 +124,36 @@ describe('preorder role capabilities (organizer A vs participant B)', () => {
     });
     expect(unreg.body.canCreatePreorder).toBe(false);
     expect(unreg.body.preorderRestrictionReason).toContain('尚未報名');
+
+    await env.DB
+      .prepare(
+        `UPDATE registrations
+         SET status = 'WAITLIST'
+         WHERE event_id = ? AND participant_line_user_id = ?`,
+      )
+      .bind(eventId, 'U-cap-b')
+      .run();
+    const waitlistOrder = await json<{ error: string }>(
+      `/api/preorders/${offerId}/my-order`,
+      {
+        method: 'PUT',
+        headers: await authHeaders('U-cap-b', '參加者B'),
+        body: JSON.stringify({ items: [{ productId, quantity: 1 }] }),
+      },
+    );
+    expect(waitlistOrder.status).toBe(403);
+    expect(waitlistOrder.body.error).toBe('FORBIDDEN');
+
+    const unregisteredOrder = await json<{ error: string }>(
+      `/api/preorders/${offerId}/my-order`,
+      {
+        method: 'PUT',
+        headers: await authHeaders('U-cap-stranger', '未報名'),
+        body: JSON.stringify({ items: [{ productId, quantity: 1 }] }),
+      },
+    );
+    expect(unregisteredOrder.status).toBe(403);
+    expect(unregisteredOrder.body.error).toBe('FORBIDDEN');
   });
 
   it('matches SELF by participant_line_user_id when line_user_id differs', async () => {
@@ -387,6 +417,88 @@ describe('preorder MVP', () => {
     expect(idem2.status).toBe(200);
     expect(idem1.body.order.orderId).toBe(idem2.body.order.orderId);
     void first;
+  });
+
+  it('checks concurrent stock using the total across option combinations', async () => {
+    const created = await createEvent('U-cart-org', '購物車主揪', { capacity: 6 });
+    const eventId = created.body.event.eventId;
+    for (const [userId, name] of [
+      ['U-cart-org', '購物車主揪'],
+      ['U-cart-provider', '購物車代訂'],
+      ['U-cart-a', '購物車買家A'],
+      ['U-cart-b', '購物車買家B'],
+    ]) {
+      await join(userId, name, eventId);
+    }
+    const offer = await createOffer('U-cart-provider', '購物車代訂', eventId, {
+      products: [
+        {
+          name: '紅茶',
+          unitPrice: 30,
+          quantityLimit: 3,
+          isActive: true,
+          optionGroups: [
+            {
+              name: '糖度',
+              type: 'SINGLE',
+              isRequired: true,
+              minSelections: 1,
+              maxSelections: 1,
+              values: [
+                { name: '無糖', priceAdjustment: 0 },
+                { name: '微糖', priceAdjustment: 0 },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const offerId = offer.body.offer.offerId;
+    const detail = await json<{
+      offer: {
+        products: Array<{
+          productId: string;
+          optionGroups: Array<{
+            optionGroupId: string;
+            values: Array<{ optionValueId: string }>;
+          }>;
+        }>;
+      };
+    }>(`/api/preorders/${offerId}`, {
+      headers: await authHeaders('U-cart-a', '購物車買家A'),
+    });
+    const product = detail.body.offer.products[0];
+    const sugar = product.optionGroups[0];
+    const cartPayload = {
+      items: sugar.values.map((value) => ({
+        productId: product.productId,
+        quantity: 1,
+        options: [
+          {
+            optionGroupId: sugar.optionGroupId,
+            optionValueIds: [value.optionValueId],
+          },
+        ],
+      })),
+    };
+    const [a, b] = await Promise.all([
+      json(`/api/preorders/${offerId}/my-order`, {
+        method: 'PUT',
+        headers: await authHeaders('U-cart-a', '購物車買家A'),
+        body: JSON.stringify(cartPayload),
+      }),
+      json(`/api/preorders/${offerId}/my-order`, {
+        method: 'PUT',
+        headers: await authHeaders('U-cart-b', '購物車買家B'),
+        body: JSON.stringify(cartPayload),
+      }),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    const stored = await env.DB
+      .prepare('SELECT ordered_quantity FROM preorder_products WHERE product_id = ?')
+      .bind(product.productId)
+      .first<{ ordered_quantity: number }>();
+    expect(stored?.ordered_quantity).toBe(2);
   });
 
   it('buyer sees only own order; provider sees all + summary; payment transitions; confirmed cannot self-cancel', async () => {
