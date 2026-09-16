@@ -56,6 +56,7 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
   const [notice, setNotice] = useState('');
   const [pending, setPending] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingRemovalLineId, setPendingRemovalLineId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [dirty, setDirty] = useState(false);
   const dirtyRef = useRef(false);
@@ -310,6 +311,14 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
     );
   }
 
+  function decreaseCartLine(line: CartLine) {
+    if (line.quantity === 1) {
+      setPendingRemovalLineId(line.cartLineId);
+      return;
+    }
+    updateCartQuantity(line.cartLineId, line.quantity - 1);
+  }
+
   function cartOptionSummary(line: CartLine): string {
     const product = offer?.products.find((candidate) => candidate.productId === line.productId);
     const savedItem = order?.items.find((item) => item.orderItemId === line.cartLineId);
@@ -321,9 +330,7 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
         const valueLabels = (selected.optionValueIds ?? []).map((valueId) => {
           const value = group?.values.find((candidate) => candidate.optionValueId === valueId);
           const saved = savedItem?.options.find((option) => option.optionValueId === valueId);
-          return `${group?.name ?? saved?.groupNameSnapshot ?? '選項'}：${
-            value?.name ?? saved?.optionNameSnapshot ?? '已選'
-          }`;
+          return value?.name ?? saved?.optionNameSnapshot ?? '已選';
         });
         return selected.textValue
           ? [...valueLabels, `${group?.name ?? '備註'}：${selected.textValue}`]
@@ -385,20 +392,22 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
       {syncHint ? <p className="hint">{syncHint}</p> : null}
       {error ? <p className="error">{error}</p> : null}
 
-      <section className="panel stack">
+      <section className="panel preorder-overview">
         <div className="section-heading">
           <h1 className="preorder-wrap">{offer.title}</h1>
           <span className={`preorder-status tone-${offerStatusTone(offer.status)}`}>
             {offerStatusLabel(offer.status)}
           </span>
         </div>
-        <p className="hint preorder-wrap">店家：{offer.merchantName}</p>
-        <p className="hint preorder-wrap">代訂者：{offer.providerDisplayName}</p>
-        <p className="hint">截止：{formatIsoDateTime(offer.orderDeadline)}</p>
-        {offer.description ? <p className="hint preorder-wrap">{offer.description}</p> : null}
+        <div className="preorder-meta-grid">
+          <span className="preorder-wrap"><strong>店家</strong>{offer.merchantName}</span>
+          <span className="preorder-wrap"><strong>代訂者</strong>{offer.providerDisplayName}</span>
+          <span><strong>截止</strong>{formatIsoDateTime(offer.orderDeadline)}</span>
+        </div>
+        {offer.description ? <p className="preorder-description preorder-wrap">{offer.description}</p> : null}
         <div className="preorder-payment-box">
           <strong>付款說明</strong>
-          <p>{PREORDER_PAYMENT_DISCLAIMER}</p>
+          <p className="preorder-payment-disclaimer">{PREORDER_PAYMENT_DISCLAIMER}</p>
           {offer.paymentInstructions && offer.paymentInstructions !== PREORDER_PAYMENT_DISCLAIMER ? (
             <p className="preorder-wrap">{offer.paymentInstructions}</p>
           ) : null}
@@ -409,7 +418,7 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
           ) : null}
         </div>
         {offer.viewer.canManagePreorder ? (
-          <Link className="btn secondary" to={`/preorders/${offerId}/manage`}>
+          <Link className="btn secondary preorder-manage-link" to={`/preorders/${offerId}/manage`}>
             前往代訂管理
           </Link>
         ) : null}
@@ -510,61 +519,63 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
                 );
               })}
             </div>
-            <div className="preorder-qty-controls" role="group" aria-label={`${product.name} 數量`}>
+            <div className="preorder-product-actions">
+              <div className="preorder-qty-controls" role="group" aria-label={`${product.name} 數量`}>
+                <button
+                  className="btn secondary btn-compact preorder-qty-btn"
+                  type="button"
+                  disabled={!canEditOrder || quantity <= 1 || pending}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    markDirty();
+                    setDraftQty((previous) => ({
+                      ...previous,
+                      [product.productId]: Math.max(1, quantity - 1),
+                    }));
+                  }}
+                  aria-label={`減少 ${product.name}`}
+                >
+                  −
+                </button>
+                <span className="preorder-qty-value">{quantity}</span>
+                <button
+                  className="btn secondary btn-compact preorder-qty-btn"
+                  type="button"
+                  disabled={
+                    !canEditOrder ||
+                    pending ||
+                    !product.isActive ||
+                    (product.remainingQuantity != null &&
+                      quantity >=
+                        product.remainingQuantity +
+                          (order?.items
+                            .filter((item) => item.productId === product.productId)
+                            .reduce((sum, item) => sum + item.quantity, 0) || 0))
+                  }
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    markDirty();
+                    setDraftQty((previous) => ({
+                      ...previous,
+                      [product.productId]: quantity + 1,
+                    }));
+                  }}
+                  aria-label={`增加 ${product.name}`}
+                >
+                  +
+                </button>
+              </div>
               <button
-                className="btn secondary btn-compact preorder-qty-btn"
+                className="btn secondary preorder-add-cart"
                 type="button"
-                disabled={!canEditOrder || quantity <= 1 || pending}
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  markDirty();
-                  setDraftQty((previous) => ({
-                    ...previous,
-                    [product.productId]: Math.max(1, quantity - 1),
-                  }));
-                }}
-                aria-label={`減少 ${product.name}`}
+                disabled={!canEditOrder || pending || !product.isActive}
+                onClick={() => addToCart(product.productId)}
               >
-                −
-              </button>
-              <span className="preorder-qty-value">{quantity}</span>
-              <button
-                className="btn secondary btn-compact preorder-qty-btn"
-                type="button"
-                disabled={
-                  !canEditOrder ||
-                  pending ||
-                  !product.isActive ||
-                  (product.remainingQuantity != null &&
-                    quantity >=
-                      product.remainingQuantity +
-                        (order?.items
-                          .filter((item) => item.productId === product.productId)
-                          .reduce((sum, item) => sum + item.quantity, 0) || 0))
-                }
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  markDirty();
-                  setDraftQty((previous) => ({
-                    ...previous,
-                    [product.productId]: quantity + 1,
-                  }));
-                }}
-                aria-label={`增加 ${product.name}`}
-              >
-                +
+                加入購物車
               </button>
             </div>
-            <button
-              className="btn secondary"
-              type="button"
-              disabled={!canEditOrder || pending || !product.isActive}
-              onClick={() => addToCart(product.productId)}
-            >
-              加入購物車
-            </button>
           </div>
           );
         })}
@@ -575,22 +586,17 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
         {lines.length === 0 ? <p className="hint">尚未加入商品</p> : null}
         {lines.map((line) => (
           <div className="preorder-product-line preorder-cart-line" key={line.cartLineId}>
-            <div className="preorder-product-line-main">
-              <strong className="preorder-wrap">{line.product.name}</strong>
-              {cartOptionSummary(line) ? (
-                <div className="hint preorder-wrap">{cartOptionSummary(line)}</div>
-              ) : null}
-              <div className="hint">
-                單價 ${line.unitPrice + line.optionPrice}
-                {line.optionPrice ? `（選項 +$${line.optionPrice}）` : ''}
-              </div>
+            <div className="preorder-cart-summary preorder-wrap">
+              <strong>{line.product.name}</strong>
+              {cartOptionSummary(line) ? <span>｜{cartOptionSummary(line)}</span> : null}
+              <strong>｜${line.unitPrice + line.optionPrice}</strong>
             </div>
             <div className="preorder-qty-controls" role="group" aria-label={`${line.product.name} 購物車數量`}>
               <button
                 className="btn secondary btn-compact preorder-qty-btn"
                 type="button"
                 disabled={!canEditOrder || pending}
-                onClick={() => updateCartQuantity(line.cartLineId, line.quantity - 1)}
+                onClick={() => decreaseCartLine(line)}
                 aria-label={`減少 ${line.product.name}`}
               >
                 −
@@ -604,17 +610,6 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
                 aria-label={`增加 ${line.product.name}`}
               >
                 +
-              </button>
-            </div>
-            <div className="preorder-line-subtotal">
-              <strong>${line.subtotal}</strong>
-              <button
-                className="btn danger btn-compact"
-                type="button"
-                disabled={!canEditOrder || pending}
-                onClick={() => updateCartQuantity(line.cartLineId, 0)}
-              >
-                移除
               </button>
             </div>
           </div>
@@ -735,6 +730,36 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
           </button>
         ) : null}
       </div>
+
+      {pendingRemovalLineId ? (
+        <div className="modal-backdrop" role="presentation">
+          <div className="modal sheet-modal" role="dialog" aria-modal="true" aria-label="移除購物車商品">
+            <h2 className="modal-title">移除此商品？</h2>
+            <div className="stack modal-body">
+              <p>數量已是 1，繼續將從購物車移除這個選項組合。</p>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="btn secondary"
+                type="button"
+                onClick={() => setPendingRemovalLineId(null)}
+              >
+                取消
+              </button>
+              <button
+                className="btn danger"
+                type="button"
+                onClick={() => {
+                  updateCartQuantity(pendingRemovalLineId, 0);
+                  setPendingRemovalLineId(null);
+                }}
+              >
+                確認移除
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {confirmOpen ? (
         <div className="modal-backdrop" role="presentation">

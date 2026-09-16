@@ -70,4 +70,11 @@ describe('preorder UI', () => {
     expect(orderPageSource).toContain('normalizedOptionsKey');
     expect(orderPageSource).toContain('移除');
   });
+
+  it('keeps preorder typography readable and action rows responsive', () => {
+    expect(css).toMatch(/\.preorder-order-page\s*\{[\s\S]*font-size:\s*16px/);
+    expect(css).toMatch(/\.preorder-meta-grid,[\s\S]*font-size:\s*14px/);
+    expect(css).toMatch(/\.preorder-product-actions\s*\{[\s\S]*flex-wrap:\s*wrap/);
+    expect(css).toMatch(/\.preorder-cart-summary\s*\{[\s\S]*min-width:\s*0/);
+  });
 });
