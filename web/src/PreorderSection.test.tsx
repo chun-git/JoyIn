@@ -15,6 +15,10 @@ vi.mock('./api', () => ({
 }));
 
 const css = readFileSync(path.join(__dirname, 'index.css'), 'utf8');
+const orderPageSource = readFileSync(
+  path.join(__dirname, 'pages', 'PreorderOrderPage.tsx'),
+  'utf8',
+);
 
 const session: LiffSession = {
   lineUserId: 'U-test',
@@ -47,5 +51,14 @@ describe('preorder UI', () => {
     expect(css).toMatch(/minmax\(0,\s*1fr\)/);
     expect(css).toMatch(/overflow-wrap:\s*anywhere/);
     expect(css).toMatch(/\.preorder-status\.tone-pending/);
+    expect(css).toMatch(/\.shared-menu-grid[\s\S]*minmax\(0,\s*1fr\)/);
+  });
+
+  it('uses native 44px touch quantity buttons without mouse-only handlers', () => {
+    expect(orderPageSource).toMatch(/className="btn secondary btn-compact preorder-qty-btn"/);
+    expect(orderPageSource).toMatch(/type="button"/);
+    expect(orderPageSource).not.toMatch(/onPointerDown|onMouseDown/);
+    expect(css).toMatch(/\.preorder-qty-btn[\s\S]*min-width:\s*44px/);
+    expect(css).toMatch(/\.preorder-qty-btn[\s\S]*min-height:\s*44px/);
   });
 });

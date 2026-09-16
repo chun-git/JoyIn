@@ -36,6 +36,14 @@ export const Errors = {
     new AppError(403, 'link_unrecoverable', message),
   rateLimited: (message = '操作過於頻繁，請稍後再試') =>
     new AppError(429, 'rate_limited', message),
+  imageDownloadTimeout: (message = '圖片下載逾時，請確認網址後重試') =>
+    new AppError(408, 'image_download_timeout', message),
+  aiMonthlyLimit: (message = '本月 AI 菜單解析額度已用完，仍可手動建立菜單') =>
+    new AppError(429, 'ai_monthly_limit', message),
+  aiDailyLimit: (message = '今日 AI 菜單解析服務已達平台上限，請明天再試') =>
+    new AppError(429, 'ai_platform_daily_limit', message),
+  aiParseFailed: (message = 'AI 解析失敗，未扣除額度，請重試或改用手動輸入') =>
+    new AppError(422, 'ai_parse_failed', message),
   groupMembersUnavailable: (message = '暫時無法取得群組成員') =>
     new AppError(502, 'group_members_unavailable', message),
 };

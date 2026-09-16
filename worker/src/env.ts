@@ -1,5 +1,6 @@
 export interface Bindings {
   DB: D1Database;
+  AI: Ai;
   ASSETS?: Fetcher;
   LINE_CHANNEL_ACCESS_TOKEN: string;
   LINE_CHANNEL_SECRET: string;
@@ -12,6 +13,9 @@ export interface Bindings {
   LIFF_CONTEXT_SIGNING_SECRET: string;
   ALLOW_TEST_AUTH: string;
   APP_TIMEZONE?: string;
+  MENU_AI_MODEL?: string;
+  MENU_AI_MONTHLY_FREE_LIMIT?: string;
+  MENU_AI_PLATFORM_DAILY_LIMIT?: string;
 }
 
 export interface AuthUser {

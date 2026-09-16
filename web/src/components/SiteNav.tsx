@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 
-export function SiteNav({ current }: { current?: 'events' | 'help' }) {
+export function SiteNav({ current }: { current?: 'events' | 'menus' | 'help' }) {
   return (
     <nav className="site-nav" aria-label="主要">
       <Link to={current === 'help' ? '/help' : '/events'} className="site-nav-brand">
@@ -13,6 +13,13 @@ export function SiteNav({ current }: { current?: 'events' | 'help' }) {
           aria-current={current === 'events' ? 'page' : undefined}
         >
           活動
+        </Link>
+        <Link
+          to="/menus"
+          className="site-nav-pill"
+          aria-current={current === 'menus' ? 'page' : undefined}
+        >
+          共用菜單
         </Link>
         <Link
           to="/help"

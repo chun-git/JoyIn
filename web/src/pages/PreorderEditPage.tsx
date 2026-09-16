@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { PREORDER_PAYMENT_DISCLAIMER, type PreorderProductInput } from '../../../shared/types';
+import {
+  PREORDER_PAYMENT_DISCLAIMER,
+  type PreorderProductInput,
+  type ProductOptionGroupType,
+} from '../../../shared/types';
 import { api } from '../api';
 import { SiteNav } from '../components/SiteNav';
 import { StateBlock } from '../components/StateBlock';
@@ -14,20 +18,35 @@ type DraftProduct = {
   key: string;
   productId?: string;
   name: string;
+  description: string;
   specification: string;
   unitPrice: string;
   quantityLimit: string;
   isActive: boolean;
+  optionGroups: DraftOptionGroup[];
+};
+
+type DraftOptionValue = { key: string; name: string; priceAdjustment: string; isActive: boolean };
+type DraftOptionGroup = {
+  key: string;
+  name: string;
+  type: ProductOptionGroupType;
+  isRequired: boolean;
+  minSelections: string;
+  maxSelections: string;
+  values: DraftOptionValue[];
 };
 
 function emptyProduct(key: string): DraftProduct {
   return {
     key,
     name: '',
+    description: '',
     specification: '',
     unitPrice: '',
     quantityLimit: '',
     isActive: true,
+    optionGroups: [],
   };
 }
 
@@ -47,6 +66,7 @@ export function PreorderEditPage({ session }: { session: LiffSession }) {
   const [loading, setLoading] = useState(!isCreate);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [eventStartHint, setEventStartHint] = useState('');
+  const [publishToSharedMenu, setPublishToSharedMenu] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -86,10 +106,25 @@ export function PreorderEditPage({ session }: { session: LiffSession }) {
                 key: p.productId,
                 productId: p.productId,
                 name: p.name,
+                description: p.description,
                 specification: p.specification || '',
                 unitPrice: String(p.unitPrice),
                 quantityLimit: p.quantityLimit == null ? '' : String(p.quantityLimit),
                 isActive: p.isActive,
+                optionGroups: p.optionGroups.map((group) => ({
+                  key: group.optionGroupId,
+                  name: group.name,
+                  type: group.type,
+                  isRequired: group.isRequired,
+                  minSelections: String(group.minSelections),
+                  maxSelections: group.maxSelections == null ? '' : String(group.maxSelections),
+                  values: group.values.map((value) => ({
+                    key: value.optionValueId,
+                    name: value.name,
+                    priceAdjustment: String(value.priceAdjustment),
+                    isActive: value.isActive,
+                  })),
+                })),
               }))
             : [emptyProduct('p1')],
         );
@@ -116,6 +151,48 @@ export function PreorderEditPage({ session }: { session: LiffSession }) {
     setProducts((prev) => prev.map((p) => (p.key === key ? { ...p, ...patch } : p)));
   }
 
+  function updateOptionGroup(productKey: string, groupKey: string, patch: Partial<DraftOptionGroup>) {
+    setProducts((prev) =>
+      prev.map((product) =>
+        product.key === productKey
+          ? {
+              ...product,
+              optionGroups: product.optionGroups.map((group) =>
+                group.key === groupKey ? { ...group, ...patch } : group,
+              ),
+            }
+          : product,
+      ),
+    );
+  }
+
+  function updateOptionValue(
+    productKey: string,
+    groupKey: string,
+    valueKey: string,
+    patch: Partial<DraftOptionValue>,
+  ) {
+    setProducts((prev) =>
+      prev.map((product) =>
+        product.key === productKey
+          ? {
+              ...product,
+              optionGroups: product.optionGroups.map((group) =>
+                group.key === groupKey
+                  ? {
+                      ...group,
+                      values: group.values.map((value) =>
+                        value.key === valueKey ? { ...value, ...patch } : value,
+                      ),
+                    }
+                  : group,
+              ),
+            }
+          : product,
+      ),
+    );
+  }
+
   function moveProduct(key: string, direction: -1 | 1) {
     setProducts((prev) => {
       const index = prev.findIndex((p) => p.key === key);
@@ -139,11 +216,28 @@ export function PreorderEditPage({ session }: { session: LiffSession }) {
     const productInputs: PreorderProductInput[] = products.map((p, index) => ({
       productId: p.productId,
       name: p.name.trim(),
+      description: p.description.trim(),
       specification: p.specification.trim() || null,
       unitPrice: Number(p.unitPrice),
       quantityLimit: p.quantityLimit.trim() === '' ? null : Number(p.quantityLimit),
       sortOrder: index,
       isActive: p.isActive,
+      optionGroups: p.optionGroups.map((group, groupIndex) => ({
+        optionGroupId: group.key.startsWith('new-') ? undefined : group.key,
+        name: group.name.trim(),
+        type: group.type,
+        isRequired: group.isRequired,
+        minSelections: group.minSelections === '' ? undefined : Number(group.minSelections),
+        maxSelections: group.maxSelections === '' ? null : Number(group.maxSelections),
+        sortOrder: groupIndex,
+        values: group.values.map((value, valueIndex) => ({
+          optionValueId: value.key.startsWith('new-') ? undefined : value.key,
+          name: value.name.trim(),
+          priceAdjustment: Number(value.priceAdjustment || 0),
+          isActive: value.isActive,
+          sortOrder: valueIndex,
+        })),
+      })),
     }));
     return {
       title: title.trim(),
@@ -164,6 +258,7 @@ export function PreorderEditPage({ session }: { session: LiffSession }) {
     paymentInstructions: string;
     paymentUrl: string | null;
     products: PreorderProductInput[];
+    sharedMenuVersionId?: string | null;
   };
 
   async function save() {
@@ -172,6 +267,33 @@ export function PreorderEditPage({ session }: { session: LiffSession }) {
     try {
       const payload = buildPayload();
       if (isCreate) {
+        if (publishToSharedMenu) {
+          const draft = await api.createSharedMenuDraft(
+            session,
+            {
+              merchantName: payload.merchantName,
+              category: '',
+              description: payload.description,
+              products: payload.products.map((product, index) => ({
+                name: product.name,
+                description: product.description || product.specification || '',
+                basePrice: product.unitPrice,
+                isActive: product.isActive,
+                sortOrder: index,
+                optionGroups: product.optionGroups,
+              })),
+            },
+            crypto.randomUUID(),
+          );
+          const published = await api.publishSharedMenuVersion(
+            session,
+            draft.version.menuId,
+            draft.version.versionId,
+            null,
+            true,
+          );
+          payload.sharedMenuVersionId = published.currentVersion?.versionId || null;
+        }
         const result = await api.createPreorder(session, eventId, payload);
         navigate(`/preorders/${result.offer.offerId}/manage`, { replace: true });
       } else {
@@ -249,6 +371,11 @@ export function PreorderEditPage({ session }: { session: LiffSession }) {
             {liveSummary.count} 項 · 單價合計參考 ${liveSummary.sampleTotal}
           </span>
         </div>
+        {isCreate ? (
+          <Link className="btn secondary" to={`/events/${eventId}/preorders/menu`}>
+            改用共用菜單建立
+          </Link>
+        ) : null}
         {products.map((product, index) => (
           <div className="preorder-product-editor" key={product.key}>
             <label className="field">
@@ -260,6 +387,15 @@ export function PreorderEditPage({ session }: { session: LiffSession }) {
               />
             </label>
             <label className="field">
+              <span>商品說明（選填）</span>
+              <textarea
+                value={product.description}
+                onChange={(e) => updateProduct(product.key, { description: e.target.value })}
+                rows={2}
+                maxLength={500}
+              />
+            </label>
+            <label className="field">
               <span>規格（選填）</span>
               <input
                 value={product.specification}
@@ -267,6 +403,181 @@ export function PreorderEditPage({ session }: { session: LiffSession }) {
                 maxLength={80}
               />
             </label>
+            <div className="stack preorder-option-editor">
+              <div className="section-heading">
+                <strong>彈性選項</strong>
+                <button
+                  className="btn secondary btn-compact"
+                  type="button"
+                  onClick={() =>
+                    updateProduct(product.key, {
+                      optionGroups: [
+                        ...product.optionGroups,
+                        {
+                          key: `new-g-${Date.now()}`,
+                          name: '',
+                          type: 'SINGLE',
+                          isRequired: false,
+                          minSelections: '0',
+                          maxSelections: '1',
+                          values: [],
+                        },
+                      ],
+                    })
+                  }
+                >
+                  新增選項群組
+                </button>
+              </div>
+              {product.optionGroups.map((group) => (
+                <div className="preorder-option-group" key={group.key}>
+                  <label className="field">
+                    <span>群組名稱</span>
+                    <input
+                      value={group.name}
+                      onChange={(e) =>
+                        updateOptionGroup(product.key, group.key, { name: e.target.value })
+                      }
+                      placeholder="例如 糖度、加料、備註"
+                    />
+                  </label>
+                  <div className="preorder-product-row">
+                    <label className="field">
+                      <span>類型</span>
+                      <select
+                        value={group.type}
+                        onChange={(e) =>
+                          updateOptionGroup(product.key, group.key, {
+                            type: e.target.value as ProductOptionGroupType,
+                            maxSelections: e.target.value === 'SINGLE' ? '1' : '',
+                            values: e.target.value === 'TEXT' ? [] : group.values,
+                          })
+                        }
+                      >
+                        <option value="SINGLE">單選</option>
+                        <option value="MULTIPLE">複選</option>
+                        <option value="TEXT">自由文字</option>
+                      </select>
+                    </label>
+                    <label className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={group.isRequired}
+                        onChange={(e) =>
+                          updateOptionGroup(product.key, group.key, {
+                            isRequired: e.target.checked,
+                            minSelections: e.target.checked ? '1' : '0',
+                          })
+                        }
+                      />
+                      <span>必填</span>
+                    </label>
+                  </div>
+                  {group.type === 'MULTIPLE' ? (
+                    <div className="preorder-product-row">
+                      <label className="field">
+                        <span>最少選擇</span>
+                        <input
+                          inputMode="numeric"
+                          value={group.minSelections}
+                          onChange={(e) =>
+                            updateOptionGroup(product.key, group.key, {
+                              minSelections: e.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        <span>最多選擇（選填）</span>
+                        <input
+                          inputMode="numeric"
+                          value={group.maxSelections}
+                          onChange={(e) =>
+                            updateOptionGroup(product.key, group.key, {
+                              maxSelections: e.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                    </div>
+                  ) : null}
+                  {group.type !== 'TEXT'
+                    ? group.values.map((value) => (
+                        <div className="preorder-option-value" key={value.key}>
+                          <input
+                            aria-label={`${group.name || '選項'}名稱`}
+                            value={value.name}
+                            onChange={(e) =>
+                              updateOptionValue(product.key, group.key, value.key, {
+                                name: e.target.value,
+                              })
+                            }
+                            placeholder="選項名稱"
+                          />
+                          <input
+                            aria-label={`${value.name || '選項'}加價`}
+                            inputMode="numeric"
+                            value={value.priceAdjustment}
+                            onChange={(e) =>
+                              updateOptionValue(product.key, group.key, value.key, {
+                                priceAdjustment: e.target.value,
+                              })
+                            }
+                            placeholder="加價"
+                          />
+                          <button
+                            className="btn secondary btn-compact"
+                            type="button"
+                            onClick={() =>
+                              updateOptionGroup(product.key, group.key, {
+                                values: group.values.filter((item) => item.key !== value.key),
+                              })
+                            }
+                          >
+                            移除
+                          </button>
+                        </div>
+                      ))
+                    : null}
+                  <div className="row">
+                    {group.type !== 'TEXT' ? (
+                      <button
+                        className="btn secondary btn-compact"
+                        type="button"
+                        onClick={() =>
+                          updateOptionGroup(product.key, group.key, {
+                            values: [
+                              ...group.values,
+                              {
+                                key: `new-v-${Date.now()}`,
+                                name: '',
+                                priceAdjustment: '0',
+                                isActive: true,
+                              },
+                            ],
+                          })
+                        }
+                      >
+                        新增選項值
+                      </button>
+                    ) : null}
+                    <button
+                      className="btn secondary btn-compact"
+                      type="button"
+                      onClick={() =>
+                        updateProduct(product.key, {
+                          optionGroups: product.optionGroups.filter(
+                            (item) => item.key !== group.key,
+                          ),
+                        })
+                      }
+                    >
+                      移除群組
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
             <div className="preorder-product-row">
               <label className="field">
                 <span>單價</span>
@@ -326,6 +637,16 @@ export function PreorderEditPage({ session }: { session: LiffSession }) {
         >
           新增商品
         </button>
+        {isCreate ? (
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={publishToSharedMenu}
+              onChange={(event) => setPublishToSharedMenu(event.target.checked)}
+            />
+            <span>同時將這份菜單發布到全站共用菜單庫</span>
+          </label>
+        ) : null}
       </section>
 
       <div className="row">

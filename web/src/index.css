@@ -1347,3 +1347,115 @@ section h2 { margin: 0 0 10px; font-size: 18px; }
   gap: 8px;
   min-width: 0;
 }
+
+/* —— Shared menus and flexible options —— */
+.shared-menu-page,
+.shared-menu-edit-page,
+.preorder-from-menu-page,
+.shared-menu-search,
+.shared-menu-grid,
+.shared-menu-products,
+.preorder-option-editor,
+.preorder-option-group,
+.preorder-option-picker {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.shared-menu-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.shared-menu-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+.shared-menu-card,
+.shared-menu-product {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  padding: 12px;
+  text-align: left;
+  color: inherit;
+  background: var(--card, #fff);
+  border: 1px solid color-mix(in srgb, var(--brand) 18%, transparent);
+  border-radius: 14px;
+  overflow-wrap: anywhere;
+  box-sizing: border-box;
+}
+button.shared-menu-card {
+  min-height: 44px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.shared-menu-product small {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+.preorder-item-options {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted, #687786);
+  overflow-wrap: anywhere;
+}
+.preorder-option-editor,
+.preorder-option-group,
+.ai-menu-import,
+.ai-confirmation {
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--brand) 14%, transparent);
+  border-radius: 12px;
+  background: #f8fbfd;
+}
+.preorder-option-value {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(72px, 0.45fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.preorder-option-picker {
+  margin: 10px 0 0;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--brand) 14%, transparent);
+  border-radius: 10px;
+}
+.preorder-option-picker legend {
+  max-width: 100%;
+  padding: 0 4px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.preorder-option-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+.preorder-line-subtotal {
+  display: grid;
+  gap: 2px;
+  text-align: right;
+}
+.shared-menu-version-list {
+  overflow-wrap: anywhere;
+}
+@media (min-width: 768px) {
+  .shared-menu-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 420px) {
+  .shared-menu-search,
+  .preorder-option-value,
+  .preorder-product-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .section-heading > .btn,
+  .shared-menu-search > .btn {
+    width: 100%;
+  }
+}

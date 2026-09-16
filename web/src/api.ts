@@ -2,6 +2,7 @@ import type {
   CopyEventInput,
   CreateEventInput,
   CreatePreorderOfferInput,
+  CreatePreorderFromMenuInput,
   EventDetail,
   EventPreorderCancelImpact,
   EventPreorderListResponse,
@@ -14,6 +15,12 @@ import type {
   PreorderProduct,
   PreorderProductInput,
   PreselectMemberRoster,
+  AiMenuDraft,
+  AiMenuQuota,
+  SharedMenuDetail,
+  SharedMenuSummary,
+  SharedMenuVersion,
+  SharedMenuVersionInput,
   TransferInviteCreated,
   TransferInvitePreview,
   UpdateEventInput,
@@ -263,10 +270,16 @@ export const api = {
     request<EventPreorderListResponse>(`/api/events/${eventId}/preorders`, session),
   preorderCancelCheck: (session: LiffSession, eventId: string) =>
     request<EventPreorderCancelImpact>(`/api/events/${eventId}/preorder-cancel-check`, session),
-  createPreorder: (session: LiffSession, eventId: string, input: CreatePreorderOfferInput) =>
+  createPreorder: (
+    session: LiffSession,
+    eventId: string,
+    input: CreatePreorderOfferInput,
+    idempotencyKey = crypto.randomUUID(),
+  ) =>
     request<{ offer: PreorderOfferDetail }>(`/api/events/${eventId}/preorders`, session, {
       method: 'POST',
       body: JSON.stringify(input),
+      headers: { 'Idempotency-Key': idempotencyKey },
     }),
   getPreorder: (session: LiffSession, offerId: string) =>
     request<{ offer: PreorderOfferDetail }>(`/api/preorders/${offerId}`, session),
@@ -351,4 +364,83 @@ export const api = {
       session,
       { method: 'POST', body: JSON.stringify({ reason }) },
     ),
+  listSharedMenus: (session: LiffSession, search = '') =>
+    request<{ menus: SharedMenuSummary[] }>(
+      `/api/menus${search ? `?q=${encodeURIComponent(search)}` : ''}`,
+      session,
+    ),
+  getSharedMenu: (session: LiffSession, menuId: string) =>
+    request<SharedMenuDetail>(`/api/menus/${menuId}`, session),
+  getSharedMenuVersions: (session: LiffSession, menuId: string) =>
+    request<{ versions: SharedMenuVersion[] }>(`/api/menus/${menuId}/versions`, session),
+  createSharedMenuDraft: (
+    session: LiffSession,
+    input: SharedMenuVersionInput,
+    idempotencyKey: string,
+  ) =>
+    request<{ version: SharedMenuVersion; idempotencyHit: boolean }>(
+      '/api/menus/drafts',
+      session,
+      {
+        method: 'POST',
+        body: JSON.stringify(input),
+        headers: { 'Idempotency-Key': idempotencyKey },
+      },
+    ),
+  createSharedMenuVersion: (
+    session: LiffSession,
+    menuId: string,
+    input: SharedMenuVersionInput,
+    idempotencyKey: string,
+  ) =>
+    request<{ version: SharedMenuVersion; idempotencyHit: boolean }>(
+      `/api/menus/${menuId}/versions`,
+      session,
+      {
+        method: 'POST',
+        body: JSON.stringify(input),
+        headers: { 'Idempotency-Key': idempotencyKey },
+      },
+    ),
+  publishSharedMenuVersion: (
+    session: LiffSession,
+    menuId: string,
+    versionId: string,
+    expectedCurrentVersionId: string | null,
+    confirmed: boolean,
+    idempotencyKey = crypto.randomUUID(),
+  ) =>
+    request<SharedMenuDetail>(`/api/menus/${menuId}/versions/${versionId}/publish`, session, {
+      method: 'POST',
+      body: JSON.stringify({ expectedCurrentVersionId, confirmed }),
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+  disableSharedMenu: (
+    session: LiffSession,
+    menuId: string,
+    idempotencyKey = crypto.randomUUID(),
+  ) =>
+    request<SharedMenuDetail>(`/api/menus/${menuId}/disable`, session, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+  getMyAiMenuQuota: (session: LiffSession) =>
+    request<{ quota: AiMenuQuota }>('/api/menus/ai/quota/me', session),
+  parseMenuImage: (session: LiffSession, imageUrl: string, idempotencyKey: string) =>
+    request<{ draft: AiMenuDraft }>('/api/menus/ai/parse-image', session, {
+      method: 'POST',
+      body: JSON.stringify({ imageUrl }),
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+  createPreorderFromMenu: (
+    session: LiffSession,
+    eventId: string,
+    input: CreatePreorderFromMenuInput,
+    idempotencyKey: string,
+  ) =>
+    request<{ offer: PreorderOfferDetail }>(`/api/events/${eventId}/preorders/from-menu`, session, {
+      method: 'POST',
+      body: JSON.stringify(input),
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
 };

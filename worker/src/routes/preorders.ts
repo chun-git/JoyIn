@@ -18,6 +18,7 @@ import {
   closePreorderOffer,
   confirmPreorderPayment,
   createPreorderOffer,
+  createPreorderOfferFromMenu,
   fulfillPreorderOrder,
   getMyPreorderOrder,
   getPreorderOfferDetail,
@@ -31,8 +32,10 @@ import {
   updatePreorderProduct,
   upsertMyPreorderOrder,
 } from '../services/preorders';
+import { checkMenuIdempotency } from '../services/menus';
 import type {
   CreatePreorderOfferInput,
+  CreatePreorderFromMenuInput,
   PreorderOrderItemInput,
   PreorderProductInput,
   UpdatePreorderOfferInput,
@@ -82,7 +85,13 @@ function idempotencyKeyOf(c: { req: { header: (name: string) => string | undefin
 function parseProductInput(body: Record<string, unknown>): PreorderProductInput {
   return {
     productId: typeof body.productId === 'string' ? body.productId : undefined,
+    sourceMenuProductId:
+      typeof body.sourceMenuProductId === 'string' ? body.sourceMenuProductId : null,
     name: requireString(body.name, '商品名稱', 1, 80),
+    description:
+      body.description == null || body.description === ''
+        ? ''
+        : requireString(body.description, '商品說明', 1, 500),
     specification:
       body.specification == null || body.specification === ''
         ? null
@@ -94,7 +103,39 @@ function parseProductInput(body: Record<string, unknown>): PreorderProductInput 
         : Number(body.quantityLimit),
     sortOrder: body.sortOrder == null ? undefined : Number(body.sortOrder),
     isActive: body.isActive === undefined ? true : Boolean(body.isActive),
+    optionGroups: parseOptionGroups(body.optionGroups),
   };
+}
+
+function parseOptionGroups(value: unknown): NonNullable<PreorderProductInput['optionGroups']> {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw Errors.validation('商品選項格式無效');
+  return value.map((raw) => {
+    const group = parseJson<Record<string, unknown>>(raw);
+    const values = group.values == null ? [] : group.values;
+    if (!Array.isArray(values)) throw Errors.validation('選項值格式無效');
+    return {
+      optionGroupId:
+        typeof group.optionGroupId === 'string' ? group.optionGroupId.trim() : undefined,
+      name: requireString(group.name, '選項群組名稱', 1, 60),
+      type: requireString(group.type, '選項類型', 1, 20) as 'SINGLE' | 'MULTIPLE' | 'TEXT',
+      isRequired: Boolean(group.isRequired),
+      minSelections: group.minSelections == null ? undefined : Number(group.minSelections),
+      maxSelections: group.maxSelections == null ? null : Number(group.maxSelections),
+      sortOrder: group.sortOrder == null ? undefined : Number(group.sortOrder),
+      values: values.map((rawValue) => {
+        const option = parseJson<Record<string, unknown>>(rawValue);
+        return {
+          optionValueId:
+            typeof option.optionValueId === 'string' ? option.optionValueId.trim() : undefined,
+          name: requireString(option.name, '選項名稱', 1, 60),
+          priceAdjustment: Number(option.priceAdjustment ?? 0),
+          isActive: option.isActive === undefined ? true : Boolean(option.isActive),
+          sortOrder: option.sortOrder == null ? undefined : Number(option.sortOrder),
+        };
+      }),
+    };
+  });
 }
 
 function parseProducts(value: unknown): PreorderProductInput[] {
@@ -109,6 +150,28 @@ function parseOrderItems(value: unknown): PreorderOrderItemInput[] {
     return {
       productId: requireString(item.productId, '商品', 1, 80),
       quantity: Number(item.quantity),
+      options:
+        item.options == null
+          ? []
+          : (() => {
+              if (!Array.isArray(item.options)) throw Errors.validation('訂單選項格式無效');
+              return item.options.map((rawOption) => {
+                const option = parseJson<Record<string, unknown>>(rawOption);
+                if (option.optionValueIds != null && !Array.isArray(option.optionValueIds)) {
+                  throw Errors.validation('選項值格式無效');
+                }
+                return {
+                  optionGroupId: requireString(option.optionGroupId, '選項群組', 1, 80),
+                  optionValueIds: (option.optionValueIds ?? []).map((value) =>
+                    requireString(value, '選項值', 1, 80),
+                  ),
+                  textValue:
+                    option.textValue == null || option.textValue === ''
+                      ? undefined
+                      : requireString(option.textValue, '自由文字選項', 1, 200),
+                };
+              });
+            })(),
     };
   });
 }
@@ -155,15 +218,74 @@ preorderRoutes.post(
         typeof body.paymentInstructions === 'string' ? body.paymentInstructions : '',
       paymentUrl: body.paymentUrl == null ? null : String(body.paymentUrl),
       products: parseProducts(body.products),
+      sharedMenuVersionId:
+        typeof body.sharedMenuVersionId === 'string' ? body.sharedMenuVersionId : null,
     };
+    const eventId = routeParam(c, 'eventId');
+    const user = userOf(c);
+    const key = idempotencyKeyOf(c);
+    const scope = `create_preorder:${eventId}`;
+    if (key) {
+      const existing = await checkMenuIdempotency(c.env.DB, scope, user.lineUserId, key);
+      if (existing) {
+        const offer = await getPreorderOfferDetail(c.env.DB, existing, user, groupId);
+        setPreorderMeta(c, {
+          operation: 'create_preorder_offer',
+          offerPresent: true,
+          orderPresent: false,
+          idempotencyHit: true,
+        });
+        return c.json({ offer });
+      }
+    }
     const offer = await createPreorderOffer(
       c.env.DB,
-      routeParam(c, 'eventId'),
-      userOf(c),
+      eventId,
+      user,
       groupId,
       input,
+      key ? { scope, key } : null,
     );
     setPreorderMeta(c, { operation: 'create_preorder_offer', offerPresent: true, orderPresent: false });
+    return c.json({ offer }, 201);
+  }),
+);
+
+preorderRoutes.post(
+  '/events/:eventId/preorders/from-menu',
+  withPreorderLog('create_preorder_from_menu', async (c) => {
+    const groupId = requireGroupId(c);
+    const body = parseJson<CreatePreorderFromMenuInput>(await c.req.json());
+    const eventId = routeParam(c, 'eventId');
+    const user = userOf(c);
+    const key = idempotencyKeyOf(c);
+    const scope = `create_preorder_from_menu:${eventId}`;
+    if (key) {
+      const existing = await checkMenuIdempotency(c.env.DB, scope, user.lineUserId, key);
+      if (existing) {
+        const offer = await getPreorderOfferDetail(c.env.DB, existing, user, groupId);
+        setPreorderMeta(c, {
+          operation: 'create_preorder_from_menu',
+          offerPresent: true,
+          orderPresent: false,
+          idempotencyHit: true,
+        });
+        return c.json({ offer });
+      }
+    }
+    const offer = await createPreorderOfferFromMenu(
+      c.env.DB,
+      eventId,
+      user,
+      groupId,
+      body,
+      key ? { scope, key } : null,
+    );
+    setPreorderMeta(c, {
+      operation: 'create_preorder_from_menu',
+      offerPresent: true,
+      orderPresent: false,
+    });
     return c.json({ offer }, 201);
   }),
 );

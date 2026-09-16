@@ -9,6 +9,9 @@ binding = "ASSETS"
 not_found_handling = "single-page-application"
 run_worker_first = ["/api/*", "/webhook/*"]
 
+[ai]
+binding = "AI"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "joyin-db"
@@ -21,6 +24,9 @@ crons = ["0 16 * * *"]
 [vars]
 ALLOW_TEST_AUTH = "false"
 APP_TIMEZONE = "Asia/Taipei"
+MENU_AI_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct"
+MENU_AI_MONTHLY_FREE_LIMIT = "1"
+MENU_AI_PLATFORM_DAILY_LIMIT = "50"
 # Public Pages origin used in Flex URI actions (must match LIFF Endpoint URL)
 LIFF_ENDPOINT_URL = "https://joyin-web.pages.dev"
 

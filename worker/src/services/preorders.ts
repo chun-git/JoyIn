@@ -1,5 +1,6 @@
 import type {
   CreatePreorderOfferInput,
+  CreatePreorderFromMenuInput,
   EventPreorderListResponse,
   PreorderOfferDetail,
   PreorderOfferOrderSummary,
@@ -7,6 +8,7 @@ import type {
   PreorderOrder,
   PreorderOrderItem,
   PreorderOrderItemInput,
+  PreorderOrderItemOption,
   PreorderOrderStatus,
   PreorderProduct,
   PreorderProductInput,
@@ -33,7 +35,6 @@ import {
   getPreorderOrder,
   getPreorderProduct,
   insertOrderStatusHistory,
-  insertPreorderOffer,
   insertPreorderOrder,
   insertPreorderOrderItem,
   insertPreorderProduct,
@@ -43,12 +44,22 @@ import {
   listPreorderOrdersForOffer,
   listPreorderProducts,
   prepareInsertPreorderProduct,
+  prepareInsertPreorderOffer,
   remainingQuantity,
   setPreorderOfferStatus,
   updatePreorderOfferRow,
   updatePreorderOrderRow,
   updatePreorderProductRow,
+  insertPreorderOrderItemOption,
+  listPreorderOptionGroups,
+  listPreorderOptionValues,
+  listPreorderOrderItemOptions,
+  prepareInsertPreorderOptionGroup,
+  prepareInsertPreorderOptionValue,
+  replacePreorderProductOptions,
   type PreorderOfferRow,
+  type PreorderOptionGroupRow,
+  type PreorderOptionValueRow,
   type PreorderOrderItemRow,
   type PreorderOrderRow,
   type PreorderProductRow,
@@ -58,6 +69,7 @@ import { Errors } from '../lib/errors';
 import { isExpired, nowIso } from '../lib/datetime';
 import { newId } from '../lib/ids';
 import { getReadableEvent, getVisibleEvent } from './events';
+import { getMenuDetail, getMenuVersion } from './menus';
 
 function endAtOf(row: { end_at: string | null; event_at: string }): string {
   return row.end_at || row.event_at;
@@ -175,12 +187,15 @@ function parseDeadline(value: string, eventStartAt: string, now = new Date()): s
 
 function normalizeProducts(inputs: PreorderProductInput[]): Array<{
   productId?: string;
+  sourceMenuProductId: string | null;
   name: string;
+  description: string;
   specification: string | null;
   unitPrice: number;
   quantityLimit: number | null;
   sortOrder: number;
   isActive: boolean;
+  optionGroups: NonNullable<PreorderProductInput['optionGroups']>;
 }> {
   if (!Array.isArray(inputs) || inputs.length === 0) {
     throw Errors.validation('至少需要一個商品');
@@ -206,21 +221,84 @@ function normalizeProducts(inputs: PreorderProductInput[]): Array<{
     }
     return {
       productId: raw.productId?.trim() || undefined,
+      sourceMenuProductId: raw.sourceMenuProductId?.trim() || null,
       name,
+      description: (raw.description || '').trim().slice(0, 500),
       specification,
       unitPrice,
       quantityLimit,
       sortOrder: Number.isInteger(raw.sortOrder) ? Number(raw.sortOrder) : index,
       isActive: raw.isActive !== false,
+      optionGroups: normalizePreorderOptionGroups(raw.optionGroups ?? []),
     };
   });
 }
 
-function toProduct(row: PreorderProductRow): PreorderProduct {
+function normalizePreorderOptionGroups(
+  groups: NonNullable<PreorderProductInput['optionGroups']>,
+): NonNullable<PreorderProductInput['optionGroups']> {
+  return groups.map((group, index) => {
+    const name = group.name?.trim();
+    if (!name || name.length > 60) throw Errors.validation('選項群組名稱長度需為 1 到 60 字');
+    if (!['SINGLE', 'MULTIPLE', 'TEXT'].includes(group.type)) {
+      throw Errors.validation(`${name}的選項類型無效`);
+    }
+    const values = group.type === 'TEXT' ? [] : group.values ?? [];
+    if (group.type !== 'TEXT' && values.length === 0) {
+      throw Errors.validation(`${name}至少需要一個選項`);
+    }
+    const min = group.isRequired ? Math.max(1, Number(group.minSelections ?? 1)) : 0;
+    const max =
+      group.type === 'TEXT'
+        ? null
+        : group.maxSelections == null
+          ? group.type === 'SINGLE'
+            ? 1
+            : null
+          : Number(group.maxSelections);
+    if (!Number.isInteger(min) || min < 0) throw Errors.validation(`${name}最少選擇數無效`);
+    if (max != null && (!Number.isInteger(max) || max < min || max < 1)) {
+      throw Errors.validation(`${name}最多選擇數無效`);
+    }
+    if (group.type === 'SINGLE' && max !== 1) {
+      throw Errors.validation(`${name}是單選，最多只能選 1 項`);
+    }
+    return {
+      ...group,
+      name,
+      minSelections: min,
+      maxSelections: max,
+      sortOrder: Number.isInteger(group.sortOrder) ? Number(group.sortOrder) : index,
+      values: values.map((value, valueIndex) => {
+        const valueName = value.name?.trim();
+        if (!valueName || valueName.length > 60) throw Errors.validation(`${name}的選項名稱無效`);
+        const adjustment = Number(value.priceAdjustment ?? 0);
+        if (!Number.isInteger(adjustment) || adjustment < 0) {
+          throw Errors.validation('選項加價必須為非負整數');
+        }
+        return {
+          ...value,
+          name: valueName,
+          priceAdjustment: adjustment,
+          isActive: value.isActive !== false,
+          sortOrder: Number.isInteger(value.sortOrder) ? Number(value.sortOrder) : valueIndex,
+        };
+      }),
+    };
+  });
+}
+
+function toProduct(
+  row: PreorderProductRow,
+  groups: PreorderOptionGroupRow[] = [],
+  values: PreorderOptionValueRow[] = [],
+): PreorderProduct {
   return {
     productId: row.product_id,
     offerId: row.offer_id,
     name: row.name,
+    description: row.description || '',
+    sourceMenuProductId: row.source_menu_product_id || null,
     specification: row.specification,
     unitPrice: Number(row.unit_price),
     quantityLimit: row.quantity_limit == null ? null : Number(row.quantity_limit),
@@ -228,25 +306,159 @@ function toProduct(row: PreorderProductRow): PreorderProduct {
     remainingQuantity: remainingQuantity(row),
     sortOrder: Number(row.sort_order),
     isActive: Boolean(row.is_active),
+    optionGroups: groups
+      .filter((group) => group.product_id === row.product_id)
+      .map((group) => ({
+        optionGroupId: group.option_group_id,
+        name: group.name,
+        type: group.type,
+        isRequired: Boolean(group.is_required),
+        minSelections: Number(group.min_selections),
+        maxSelections: group.max_selections == null ? null : Number(group.max_selections),
+        sortOrder: Number(group.sort_order),
+        values: values
+          .filter((value) => value.option_group_id === group.option_group_id)
+          .map((value) => ({
+            optionValueId: value.option_value_id,
+            name: value.name,
+            priceAdjustment: Number(value.price_adjustment),
+            isActive: Boolean(value.is_active),
+            sortOrder: Number(value.sort_order),
+          })),
+      })),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-function toOrderItem(row: PreorderOrderItemRow): PreorderOrderItem {
+async function hydratePreorderProducts(
+  db: D1Database,
+  rows: PreorderProductRow[],
+): Promise<PreorderProduct[]> {
+  const groups = await listPreorderOptionGroups(
+    db,
+    rows.map((row) => row.product_id),
+  );
+  const values = await listPreorderOptionValues(
+    db,
+    groups.map((group) => group.option_group_id),
+  );
+  return rows.map((row) => toProduct(row, groups, values));
+}
+
+function preorderOptionStatements(
+  db: D1Database,
+  productId: string,
+  groups: NonNullable<PreorderProductInput['optionGroups']>,
+  createdAt: string,
+): D1PreparedStatement[] {
+  const statements: D1PreparedStatement[] = [];
+  for (const [groupIndex, group] of groups.entries()) {
+    const groupId = newId();
+    statements.push(
+      prepareInsertPreorderOptionGroup(db, {
+        option_group_id: groupId,
+        product_id: productId,
+        source_option_group_id: group.optionGroupId || null,
+        name: group.name,
+        type: group.type,
+        is_required: group.isRequired ? 1 : 0,
+        min_selections: Number(group.minSelections ?? (group.isRequired ? 1 : 0)),
+        max_selections: group.maxSelections ?? (group.type === 'SINGLE' ? 1 : null),
+        sort_order: group.sortOrder ?? groupIndex,
+        created_at: createdAt,
+      }),
+    );
+    for (const [valueIndex, value] of (group.values ?? []).entries()) {
+      statements.push(
+        prepareInsertPreorderOptionValue(db, {
+          option_value_id: newId(),
+          option_group_id: groupId,
+          source_option_value_id: value.optionValueId || null,
+          name: value.name,
+          price_adjustment: Number(value.priceAdjustment),
+          is_active: value.isActive === false ? 0 : 1,
+          sort_order: value.sortOrder ?? valueIndex,
+          created_at: createdAt,
+        }),
+      );
+    }
+  }
+  return statements;
+}
+
+function preorderOptionRows(
+  productId: string,
+  groups: NonNullable<PreorderProductInput['optionGroups']>,
+  createdAt: string,
+): { groups: PreorderOptionGroupRow[]; values: PreorderOptionValueRow[] } {
+  const groupRows: PreorderOptionGroupRow[] = [];
+  const valueRows: PreorderOptionValueRow[] = [];
+  for (const [groupIndex, group] of groups.entries()) {
+    const groupId = newId();
+    groupRows.push({
+      option_group_id: groupId,
+      product_id: productId,
+      source_option_group_id: group.optionGroupId || null,
+      name: group.name,
+      type: group.type,
+      is_required: group.isRequired ? 1 : 0,
+      min_selections: Number(group.minSelections ?? (group.isRequired ? 1 : 0)),
+      max_selections: group.maxSelections ?? (group.type === 'SINGLE' ? 1 : null),
+      sort_order: group.sortOrder ?? groupIndex,
+      created_at: createdAt,
+    });
+    for (const [valueIndex, value] of (group.values ?? []).entries()) {
+      valueRows.push({
+        option_value_id: newId(),
+        option_group_id: groupId,
+        source_option_value_id: value.optionValueId || null,
+        name: value.name,
+        price_adjustment: Number(value.priceAdjustment),
+        is_active: value.isActive === false ? 0 : 1,
+        sort_order: value.sortOrder ?? valueIndex,
+        created_at: createdAt,
+      });
+    }
+  }
+  return { groups: groupRows, values: valueRows };
+}
+
+function toOrderItem(
+  row: PreorderOrderItemRow,
+  options: Awaited<ReturnType<typeof listPreorderOrderItemOptions>>,
+): PreorderOrderItem {
   return {
     orderItemId: row.order_item_id,
     productId: row.product_id,
     productNameSnapshot: row.product_name_snapshot,
     specificationSnapshot: row.specification_snapshot,
     unitPriceSnapshot: Number(row.unit_price_snapshot),
+    optionPriceSnapshot: Number(row.option_price_snapshot || 0),
     quantity: Number(row.quantity),
     subtotal: Number(row.subtotal),
+    options: options
+      .filter((option) => option.order_item_id === row.order_item_id)
+      .map(
+        (option): PreorderOrderItemOption => ({
+          orderItemOptionId: option.order_item_option_id,
+          optionGroupId: option.option_group_id,
+          optionValueId: option.option_value_id,
+          groupNameSnapshot: option.group_name_snapshot,
+          optionNameSnapshot: option.option_name_snapshot,
+          priceAdjustmentSnapshot: Number(option.price_adjustment_snapshot),
+          textValueSnapshot: option.text_value_snapshot,
+        }),
+      ),
   };
 }
 
 async function toOrder(db: D1Database, row: PreorderOrderRow): Promise<PreorderOrder> {
   const items = await listPreorderOrderItems(db, row.order_id);
+  const options = await listPreorderOrderItemOptions(
+    db,
+    items.map((item) => item.order_item_id),
+  );
   return {
     orderId: row.order_id,
     offerId: row.offer_id,
@@ -259,7 +471,7 @@ async function toOrder(db: D1Database, row: PreorderOrderRow): Promise<PreorderO
     paymentReportedAt: row.payment_reported_at,
     paymentConfirmedAt: row.payment_confirmed_at,
     fulfilledAt: row.fulfilled_at,
-    items: items.map(toOrderItem),
+    items: items.map((item) => toOrderItem(item, options)),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -340,6 +552,7 @@ export async function createPreorderOffer(
   user: AuthUser,
   groupId: string,
   input: CreatePreorderOfferInput,
+  idempotency?: { scope: string; key: string } | null,
 ): Promise<PreorderOfferDetail> {
   const event = await getVisibleEvent(db, eventId, groupId);
   await requireConfirmedSelfRegistration(db, eventId, user.lineUserId);
@@ -359,7 +572,7 @@ export async function createPreorderOffer(
 
   const createdAt = nowIso();
   const offerId = newId();
-  await insertPreorderOffer(db, {
+  const offerRow: PreorderOfferRow = {
     offer_id: offerId,
     event_id: eventId,
     group_id: groupId,
@@ -371,16 +584,41 @@ export async function createPreorderOffer(
     order_deadline: orderDeadline,
     payment_instructions: paymentInstructions,
     payment_url: paymentUrl,
+    shared_menu_version_id: input.sharedMenuVersionId || null,
     status: 'OPEN',
     created_at: createdAt,
     updated_at: createdAt,
-  });
+  };
 
-  const statements = products.map((product, index) =>
-    prepareInsertPreorderProduct(db, {
-      product_id: newId(),
+  const statements: D1PreparedStatement[] = [
+    ...(idempotency
+      ? [
+          db
+            .prepare(
+              `INSERT INTO menu_idempotency_keys
+               (scope, line_user_id, idempotency_key, resource_id, created_at)
+               VALUES (?, ?, ?, ?, ?)`,
+            )
+            .bind(
+              idempotency.scope,
+              user.lineUserId,
+              idempotency.key,
+              offerId,
+              createdAt,
+            ),
+        ]
+      : []),
+    prepareInsertPreorderOffer(db, offerRow),
+  ];
+  for (const [index, product] of products.entries()) {
+    const productId = newId();
+    statements.push(
+      prepareInsertPreorderProduct(db, {
+      product_id: productId,
       offer_id: offerId,
       name: product.name,
+      description: product.description,
+      source_menu_product_id: product.sourceMenuProductId,
       specification: product.specification,
       unit_price: product.unitPrice,
       quantity_limit: product.quantityLimit,
@@ -389,11 +627,73 @@ export async function createPreorderOffer(
       is_active: product.isActive ? 1 : 0,
       created_at: createdAt,
       updated_at: createdAt,
-    }),
-  );
-  if (statements.length > 0) await db.batch(statements);
+      }),
+      ...preorderOptionStatements(db, productId, product.optionGroups, createdAt),
+    );
+  }
+  await db.batch(statements);
 
   return getPreorderOfferDetail(db, offerId, user, groupId);
+}
+
+export async function createPreorderOfferFromMenu(
+  db: D1Database,
+  eventId: string,
+  user: AuthUser,
+  groupId: string,
+  input: CreatePreorderFromMenuInput,
+  idempotency?: { scope: string; key: string } | null,
+): Promise<PreorderOfferDetail> {
+  const detail = await getMenuDetail(db, input.menuId);
+  if (
+    detail.menu.status !== 'PUBLISHED' ||
+    detail.menu.currentVersionId !== input.menuVersionId
+  ) {
+    throw Errors.conflict('共用菜單版本已更新或停用，請重新選擇');
+  }
+  const version = await getMenuVersion(db, input.menuId, input.menuVersionId);
+  if (version.status !== 'PUBLISHED') throw Errors.conflict('只能使用已發布的共用菜單');
+  const selectedIds = new Set(input.selectedMenuProductIds ?? []);
+  const selected = version.products.filter(
+    (product) => product.isActive && selectedIds.has(product.menuProductId),
+  );
+  if (selected.length === 0 || selected.length !== selectedIds.size) {
+    throw Errors.validation('請選擇有效的共用菜單商品');
+  }
+  return createPreorderOffer(db, eventId, user, groupId, {
+    title: input.title,
+    merchantName: version.merchantName,
+    description: input.description,
+    orderDeadline: input.orderDeadline,
+    paymentInstructions: input.paymentInstructions,
+    paymentUrl: input.paymentUrl,
+    sharedMenuVersionId: version.versionId,
+    products: selected.map((product) => ({
+      name: product.name,
+      description: product.description,
+      sourceMenuProductId: product.menuProductId,
+      unitPrice: product.basePrice,
+      quantityLimit: input.quantityLimits?.[product.menuProductId] ?? null,
+      isActive: true,
+      sortOrder: product.sortOrder,
+      optionGroups: product.optionGroups.map((group) => ({
+        optionGroupId: group.optionGroupId,
+        name: group.name,
+        type: group.type,
+        isRequired: group.isRequired,
+        minSelections: group.minSelections,
+        maxSelections: group.maxSelections,
+        sortOrder: group.sortOrder,
+        values: group.values.map((value) => ({
+          optionValueId: value.optionValueId,
+          name: value.name,
+          priceAdjustment: value.priceAdjustment,
+          isActive: value.isActive,
+          sortOrder: value.sortOrder,
+        })),
+      })),
+    })),
+  }, idempotency);
 }
 
 export async function getPreorderOfferDetail(
@@ -407,7 +707,7 @@ export async function getPreorderOfferDetail(
   const ended = isExpired(endAtOf(event));
   const self = await findSelfRegistration(db, offer.event_id, user.lineUserId);
   const summary = await toOfferSummary(db, offer, user.lineUserId);
-  const products = (await listPreorderProducts(db, offerId)).map(toProduct);
+  const products = await hydratePreorderProducts(db, await listPreorderProducts(db, offerId));
   const viewer = resolvePreorderCapabilities({
     ended,
     selfStatus: self?.status,
@@ -486,6 +786,7 @@ export async function updatePreorderOffer(
         }
         await updatePreorderProductRow(db, product.productId, {
           name: product.name,
+          description: product.description,
           specification: product.specification,
           unitPrice: product.unitPrice,
           quantityLimit: product.quantityLimit,
@@ -493,11 +794,21 @@ export async function updatePreorderOffer(
           isActive: product.isActive,
           updatedAt,
         });
+        const optionRows = preorderOptionRows(product.productId, product.optionGroups, updatedAt);
+        await replacePreorderProductOptions(
+          db,
+          product.productId,
+          optionRows.groups,
+          optionRows.values,
+        );
       } else {
+        const productId = newId();
         await insertPreorderProduct(db, {
-          product_id: newId(),
+          product_id: productId,
           offer_id: offerId,
           name: product.name,
+          description: product.description,
+          source_menu_product_id: product.sourceMenuProductId,
           specification: product.specification,
           unit_price: product.unitPrice,
           quantity_limit: product.quantityLimit,
@@ -507,6 +818,8 @@ export async function updatePreorderOffer(
           created_at: updatedAt,
           updated_at: updatedAt,
         });
+        const optionRows = preorderOptionRows(productId, product.optionGroups, updatedAt);
+        await replacePreorderProductOptions(db, productId, optionRows.groups, optionRows.values);
       }
     }
     for (const row of existing) {
@@ -574,6 +887,8 @@ export async function addPreorderProduct(
     product_id: productId,
     offer_id: offerId,
     name: product.name,
+    description: product.description,
+    source_menu_product_id: product.sourceMenuProductId,
     specification: product.specification,
     unit_price: product.unitPrice,
     quantity_limit: product.quantityLimit,
@@ -583,9 +898,11 @@ export async function addPreorderProduct(
     created_at: createdAt,
     updated_at: createdAt,
   });
+  const optionRows = preorderOptionRows(productId, product.optionGroups, createdAt);
+  await replacePreorderProductOptions(db, productId, optionRows.groups, optionRows.values);
   const row = await getPreorderProduct(db, productId);
   if (!row) throw Errors.notFound('新增商品失敗');
-  return toProduct(row);
+  return (await hydratePreorderProducts(db, [row]))[0];
 }
 
 export async function updatePreorderProduct(
@@ -609,6 +926,7 @@ export async function updatePreorderProduct(
   const updatedAt = nowIso();
   await updatePreorderProductRow(db, productId, {
     name: product.name,
+    description: product.description,
     specification: product.specification,
     unitPrice: product.unitPrice,
     quantityLimit: product.quantityLimit,
@@ -616,9 +934,11 @@ export async function updatePreorderProduct(
     isActive: product.isActive,
     updatedAt,
   });
+  const optionRows = preorderOptionRows(productId, product.optionGroups, updatedAt);
+  await replacePreorderProductOptions(db, productId, optionRows.groups, optionRows.values);
   const row = await getPreorderProduct(db, productId);
   if (!row) throw Errors.notFound('更新商品失敗');
-  return toProduct(row);
+  return (await hydratePreorderProducts(db, [row]))[0];
 }
 
 export async function removePreorderProduct(
@@ -647,20 +967,32 @@ function buildOrderLines(
   items: PreorderOrderItemInput[],
   products: PreorderProductRow[],
   previousItems: PreorderOrderItemRow[],
+  optionGroups: PreorderOptionGroupRow[],
+  optionValues: PreorderOptionValueRow[],
+  previousOptions: Awaited<ReturnType<typeof listPreorderOrderItemOptions>>,
 ): Array<{
   productId: string;
   quantity: number;
   name: string;
   specification: string | null;
   unitPrice: number;
+  optionPrice: number;
   subtotal: number;
+  options: Array<{
+    optionGroupId: string;
+    optionValueId: string | null;
+    groupName: string;
+    optionName: string;
+    priceAdjustment: number;
+    textValue: string | null;
+  }>;
 }> {
   if (!Array.isArray(items) || items.length === 0) {
     throw Errors.validation('請至少選擇一項商品');
   }
   const productById = new Map(products.map((p) => [p.product_id, p]));
   const prevByProduct = new Map(previousItems.map((i) => [i.product_id, i]));
-  const merged = new Map<string, number>();
+  const inputByProduct = new Map<string, PreorderOrderItemInput>();
   for (const item of items) {
     const productId = (item.productId || '').trim();
     const quantity = Number(item.quantity);
@@ -668,10 +1000,12 @@ function buildOrderLines(
     if (!Number.isInteger(quantity) || quantity < 1) {
       throw Errors.validation('下單數量必須為正整數');
     }
-    merged.set(productId, (merged.get(productId) || 0) + quantity);
+    if (inputByProduct.has(productId)) throw Errors.validation('同一商品不可重複送出');
+    inputByProduct.set(productId, { ...item, productId, quantity });
   }
   const lines = [];
-  for (const [productId, quantity] of merged) {
+  for (const [productId, item] of inputByProduct) {
+    const quantity = Number(item.quantity);
     const product = productById.get(productId);
     if (!product || !product.is_active) {
       throw Errors.validation('部分商品已停用或不存在');
@@ -680,13 +1014,84 @@ function buildOrderLines(
     const unitPrice = prev ? Number(prev.unit_price_snapshot) : Number(product.unit_price);
     const name = prev ? prev.product_name_snapshot : product.name;
     const specification = prev ? prev.specification_snapshot : product.specification;
+    const groups = optionGroups.filter((group) => group.product_id === productId);
+    const selectedByGroup = new Map((item.options ?? []).map((option) => [option.optionGroupId, option]));
+    const snapshots: Array<{
+      optionGroupId: string;
+      optionValueId: string | null;
+      groupName: string;
+      optionName: string;
+      priceAdjustment: number;
+      textValue: string | null;
+    }> = [];
+    for (const group of groups) {
+      const selected = selectedByGroup.get(group.option_group_id);
+      if (group.type === 'TEXT') {
+        const textValue = selected?.textValue?.trim().slice(0, 200) || '';
+        if (group.is_required && !textValue) {
+          throw Errors.validation(`${group.name}為必填`);
+        }
+        if (textValue) {
+          snapshots.push({
+            optionGroupId: group.option_group_id,
+            optionValueId: null,
+            groupName: group.name,
+            optionName: '自由文字',
+            priceAdjustment: 0,
+            textValue,
+          });
+        }
+        continue;
+      }
+      const valueIds = [...new Set(selected?.optionValueIds ?? [])];
+      const min = Math.max(Number(group.min_selections), group.is_required ? 1 : 0);
+      const max = group.type === 'SINGLE' ? 1 : group.max_selections;
+      if (valueIds.length < min) throw Errors.validation(`${group.name}至少選擇 ${min} 項`);
+      if (max != null && valueIds.length > Number(max)) {
+        throw Errors.validation(`${group.name}最多選擇 ${max} 項`);
+      }
+      for (const valueId of valueIds) {
+        const value = optionValues.find(
+          (candidate) =>
+            candidate.option_group_id === group.option_group_id &&
+            candidate.option_value_id === valueId &&
+            candidate.is_active,
+        );
+        if (!value) throw Errors.validation(`${group.name}包含無效或已停用的選項`);
+        const old = prev
+          ? previousOptions.find(
+              (candidate) =>
+                candidate.order_item_id === prev.order_item_id &&
+                candidate.option_value_id === value.option_value_id,
+            )
+          : null;
+        snapshots.push({
+          optionGroupId: group.option_group_id,
+          optionValueId: value.option_value_id,
+          groupName: old?.group_name_snapshot ?? group.name,
+          optionName: old?.option_name_snapshot ?? value.name,
+          priceAdjustment: old
+            ? Number(old.price_adjustment_snapshot)
+            : Number(value.price_adjustment),
+          textValue: null,
+        });
+      }
+    }
+    for (const selectedGroupId of selectedByGroup.keys()) {
+      if (!groups.some((group) => group.option_group_id === selectedGroupId)) {
+        throw Errors.validation('包含不存在的商品選項');
+      }
+    }
+    const optionPrice = snapshots.reduce((sum, option) => sum + option.priceAdjustment, 0);
     lines.push({
       productId,
       quantity,
       name,
       specification,
       unitPrice,
-      subtotal: unitPrice * quantity,
+      optionPrice,
+      subtotal: (unitPrice + optionPrice) * quantity,
+      options: snapshots,
     });
   }
   return lines;
@@ -719,7 +1124,26 @@ export async function upsertMyPreorderOrder(
   }
 
   const previousItems = existing ? await listPreorderOrderItems(db, existing.order_id) : [];
-  const lines = buildOrderLines(items, products, previousItems);
+  const optionGroups = await listPreorderOptionGroups(
+    db,
+    products.map((product) => product.product_id),
+  );
+  const optionValues = await listPreorderOptionValues(
+    db,
+    optionGroups.map((group) => group.option_group_id),
+  );
+  const previousOptions = await listPreorderOrderItemOptions(
+    db,
+    previousItems.map((item) => item.order_item_id),
+  );
+  const lines = buildOrderLines(
+    items,
+    products,
+    previousItems,
+    optionGroups,
+    optionValues,
+    previousOptions,
+  );
   const totalAmount = lines.reduce((sum, line) => sum + line.subtotal, 0);
   const updatedAt = nowIso();
 
@@ -795,17 +1219,32 @@ export async function upsertMyPreorderOrder(
   }
 
   for (const line of lines) {
+    const orderItemId = newId();
     await insertPreorderOrderItem(db, {
-      order_item_id: newId(),
+      order_item_id: orderItemId,
       order_id: orderId!,
       product_id: line.productId,
       product_name_snapshot: line.name,
       specification_snapshot: line.specification,
       unit_price_snapshot: line.unitPrice,
+      option_price_snapshot: line.optionPrice,
       quantity: line.quantity,
       subtotal: line.subtotal,
       created_at: updatedAt,
     });
+    for (const option of line.options) {
+      await insertPreorderOrderItemOption(db, {
+        order_item_option_id: newId(),
+        order_item_id: orderItemId,
+        option_group_id: option.optionGroupId,
+        option_value_id: option.optionValueId,
+        group_name_snapshot: option.groupName,
+        option_name_snapshot: option.optionName,
+        price_adjustment_snapshot: option.priceAdjustment,
+        text_value_snapshot: option.textValue,
+        created_at: updatedAt,
+      });
+    }
   }
 
   const row = await getPreorderOrder(db, orderId!);

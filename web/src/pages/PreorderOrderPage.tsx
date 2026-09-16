@@ -25,6 +25,9 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
   const [offer, setOffer] = useState<PreorderOfferDetail | null>(null);
   const [order, setOrder] = useState<PreorderOrder | null>(null);
   const [qty, setQty] = useState<Record<string, number>>({});
+  const [selections, setSelections] = useState<
+    Record<string, Record<string, { valueIds: string[]; textValue: string }>>
+  >({});
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [pending, setPending] = useState(false);
@@ -36,15 +39,33 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
 
   const applyQtyFromServer = (detail: PreorderOfferDetail, mine: PreorderOrder | null) => {
     const next: Record<string, number> = {};
+    const nextSelections: Record<
+      string,
+      Record<string, { valueIds: string[]; textValue: string }>
+    > = {};
     for (const product of detail.products) {
       next[product.productId] = 0;
+      nextSelections[product.productId] = {};
+      for (const group of product.optionGroups) {
+        nextSelections[product.productId][group.optionGroupId] = {
+          valueIds: [],
+          textValue: '',
+        };
+      }
     }
     if (mine) {
       for (const item of mine.items) {
         next[item.productId] = item.quantity;
+        for (const option of item.options) {
+          const selected = nextSelections[item.productId]?.[option.optionGroupId];
+          if (!selected) continue;
+          if (option.optionValueId) selected.valueIds.push(option.optionValueId);
+          if (option.textValueSnapshot) selected.textValue = option.textValueSnapshot;
+        }
       }
     }
     setQty(next);
+    setSelections(nextSelections);
     dirtyRef.current = false;
     setDirty(false);
   };
@@ -104,14 +125,54 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
         const unitPrice =
           order?.items.find((i) => i.productId === product.productId)?.unitPriceSnapshot ??
           product.unitPrice;
+        const savedItem = order?.items.find((i) => i.productId === product.productId);
+        const currentSelection = selections[product.productId] || {};
+        const optionPrice = savedItem
+          ? savedItem.options.reduce((sum, option) => {
+              const selected = currentSelection[option.optionGroupId];
+              return selected?.valueIds.includes(option.optionValueId || '')
+                ? sum + option.priceAdjustmentSnapshot
+                : sum;
+            }, 0) +
+            product.optionGroups.reduce((sum, group) => {
+              const selected = currentSelection[group.optionGroupId];
+              return (
+                sum +
+                (selected?.valueIds ?? [])
+                  .filter(
+                    (valueId) =>
+                      !savedItem.options.some((option) => option.optionValueId === valueId),
+                  )
+                  .reduce(
+                    (valueSum, valueId) =>
+                      valueSum +
+                      (group.values.find((value) => value.optionValueId === valueId)
+                        ?.priceAdjustment || 0),
+                    0,
+                  )
+              );
+            }, 0)
+          : product.optionGroups.reduce(
+              (sum, group) =>
+                sum +
+                (currentSelection[group.optionGroupId]?.valueIds ?? []).reduce(
+                  (valueSum, valueId) =>
+                    valueSum +
+                    (group.values.find((value) => value.optionValueId === valueId)
+                      ?.priceAdjustment || 0),
+                  0,
+                ),
+              0,
+            );
         return {
           product,
           quantity,
           unitPrice,
-          subtotal: unitPrice * quantity,
+          optionPrice,
+          subtotal: (unitPrice + optionPrice) * quantity,
         };
       });
-  }, [offer, qty, order]);
+  }, [offer, qty, order, selections]);
 
   const total = lines.reduce((sum, line) => sum + line.subtotal, 0);
   const selected = lines.filter((line) => line.quantity > 0);
@@ -130,6 +191,19 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
     setQty((prev) => ({ ...prev, [productId]: Math.max(0, next) }));
   }
 
+  function setOptionSelection(
+    productId: string,
+    groupId: string,
+    next: { valueIds: string[]; textValue: string },
+  ) {
+    dirtyRef.current = true;
+    setDirty(true);
+    setSelections((prev) => ({
+      ...prev,
+      [productId]: { ...(prev[productId] || {}), [groupId]: next },
+    }));
+  }
+
   async function submitOrder() {
     setPending(true);
     setError('');
@@ -137,6 +211,11 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
       const items = selected.map((line) => ({
         productId: line.product.productId,
         quantity: line.quantity,
+        options: line.product.optionGroups.map((group) => ({
+          optionGroupId: group.optionGroupId,
+          optionValueIds: selections[line.product.productId]?.[group.optionGroupId]?.valueIds || [],
+          textValue: selections[line.product.productId]?.[group.optionGroupId]?.textValue || '',
+        })),
       }));
       const key = order?.orderId || `order-${offerId}-${session.lineUserId}`;
       const result = await api.upsertMyPreorderOrder(session, offerId, items, key);
@@ -218,18 +297,92 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
           <p className="hint">{orderRestrictionReason}</p>
         ) : null}
         {lines.length === 0 ? <p className="hint">目前沒有可訂購商品</p> : null}
-        {lines.map(({ product, quantity, unitPrice, subtotal }) => (
+        {lines.map(({ product, quantity, unitPrice, optionPrice, subtotal }) => (
           <div className="preorder-product-line" key={product.productId}>
             <div className="preorder-product-line-main">
               <strong className="preorder-wrap">{product.name}</strong>
               {product.specification ? (
                 <div className="hint preorder-wrap">{product.specification}</div>
               ) : null}
+              {product.description ? (
+                <div className="hint preorder-wrap">{product.description}</div>
+              ) : null}
               <div className="hint">
                 ${unitPrice}
+                {product.optionGroups.length ? ' 起' : ''}
                 {product.remainingQuantity != null ? ` · 剩餘 ${product.remainingQuantity}` : ''}
                 {!product.isActive ? ' · 已停用' : ''}
               </div>
+              {product.optionGroups.map((group) => {
+                const selectedGroup = selections[product.productId]?.[group.optionGroupId] || {
+                  valueIds: [],
+                  textValue: '',
+                };
+                return (
+                  <fieldset
+                    className="preorder-option-picker"
+                    key={group.optionGroupId}
+                    disabled={!canEditOrder || pending}
+                  >
+                    <legend>
+                      {group.name}
+                      {group.isRequired ? '（必填）' : ''}
+                    </legend>
+                    {group.type === 'TEXT' ? (
+                      <input
+                        value={selectedGroup.textValue}
+                        maxLength={200}
+                        onChange={(e) =>
+                          setOptionSelection(product.productId, group.optionGroupId, {
+                            ...selectedGroup,
+                            textValue: e.target.value,
+                          })
+                        }
+                        placeholder={`輸入${group.name}`}
+                      />
+                    ) : (
+                      <div className="preorder-option-values">
+                        {group.values
+                          .filter((value) => value.isActive)
+                          .map((value) => {
+                            const checked = selectedGroup.valueIds.includes(value.optionValueId);
+                            return (
+                              <label className="checkbox-row" key={value.optionValueId}>
+                                <input
+                                  type={group.type === 'SINGLE' ? 'radio' : 'checkbox'}
+                                  name={`${product.productId}-${group.optionGroupId}`}
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    const valueIds =
+                                      group.type === 'SINGLE'
+                                        ? e.target.checked
+                                          ? [value.optionValueId]
+                                          : []
+                                        : e.target.checked
+                                          ? [...selectedGroup.valueIds, value.optionValueId]
+                                          : selectedGroup.valueIds.filter(
+                                              (id) => id !== value.optionValueId,
+                                            );
+                                    setOptionSelection(product.productId, group.optionGroupId, {
+                                      ...selectedGroup,
+                                      valueIds,
+                                    });
+                                  }}
+                                />
+                                <span>
+                                  {value.name}
+                                  {value.priceAdjustment
+                                    ? ` ${value.priceAdjustment > 0 ? '+' : ''}$${value.priceAdjustment}`
+                                    : ''}
+                                </span>
+                              </label>
+                            );
+                          })}
+                      </div>
+                    )}
+                  </fieldset>
+                );
+              })}
             </div>
             <div className="preorder-qty-controls" role="group" aria-label={`${product.name} 數量`}>
               <button
@@ -268,7 +421,10 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
                 +
               </button>
             </div>
-            <div className="preorder-line-subtotal">${subtotal}</div>
+            <div className="preorder-line-subtotal">
+              {optionPrice ? <span className="hint">選項 {optionPrice > 0 ? '+' : ''}${optionPrice}</span> : null}
+              <strong>${subtotal}</strong>
+            </div>
           </div>
         ))}
         <div className="preorder-total-row">
@@ -284,6 +440,28 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
             {orderStatusLabel(order.status)}
           </p>
           <p className="hint">總金額：${order.totalAmount}</p>
+          <ul className="preorder-summary-list">
+            {order.items.map((item) => (
+              <li className="preorder-wrap" key={item.orderItemId}>
+                {item.productNameSnapshot} × {item.quantity} = ${item.subtotal}
+                {item.options.length ? (
+                  <small className="preorder-item-options">
+                    {item.options
+                      .map((option) =>
+                        option.textValueSnapshot
+                          ? `${option.groupNameSnapshot}：${option.textValueSnapshot}`
+                          : `${option.groupNameSnapshot}：${option.optionNameSnapshot}${
+                              option.priceAdjustmentSnapshot
+                                ? ` ${option.priceAdjustmentSnapshot > 0 ? '+' : ''}$${option.priceAdjustmentSnapshot}`
+                                : ''
+                            }`,
+                      )
+                      .join('、')}
+                  </small>
+                ) : null}
+              </li>
+            ))}
+          </ul>
           {confirmedLocked ? (
             <p className="hint">訂單已確認付款，如需取消請聯絡代訂者處理。</p>
           ) : null}

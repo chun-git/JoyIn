@@ -212,6 +212,21 @@ export function PreorderManagePage({ session }: { session: LiffSession }) {
                   {item.productNameSnapshot}
                   {item.specificationSnapshot ? `（${item.specificationSnapshot}）` : ''} ×{' '}
                   {item.quantity} = ${item.subtotal}
+                  {item.options.length ? (
+                    <small className="preorder-item-options">
+                      {item.options
+                        .map((option) =>
+                          option.textValueSnapshot
+                            ? `${option.groupNameSnapshot}：${option.textValueSnapshot}`
+                            : `${option.groupNameSnapshot}：${option.optionNameSnapshot}${
+                                option.priceAdjustmentSnapshot
+                                  ? ` ${option.priceAdjustmentSnapshot > 0 ? '+' : ''}$${option.priceAdjustmentSnapshot}`
+                                  : ''
+                              }`,
+                        )
+                        .join('、')}
+                    </small>
+                  ) : null}
                 </li>
               ))}
             </ul>

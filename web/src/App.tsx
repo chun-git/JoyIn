@@ -30,6 +30,9 @@ import { HelpPage } from './pages/HelpPage';
 import { PreorderEditPage } from './pages/PreorderEditPage';
 import { PreorderManagePage } from './pages/PreorderManagePage';
 import { PreorderOrderPage } from './pages/PreorderOrderPage';
+import { PreorderFromMenuPage } from './pages/PreorderFromMenuPage';
+import { SharedMenuEditPage } from './pages/SharedMenuEditPage';
+import { SharedMenuPage } from './pages/SharedMenuPage';
 import { TransferInvitePage } from './pages/TransferInvitePage';
 
 function isHelpPath(pathname: string): boolean {
@@ -295,6 +298,30 @@ function LiffApp() {
           }
         />
         <Route
+          path="/menus"
+          element={
+            <GroupGate session={session}>
+              <SharedMenuPage session={session} />
+            </GroupGate>
+          }
+        />
+        <Route
+          path="/menus/new"
+          element={
+            <GroupGate session={session}>
+              <SharedMenuEditPage session={session} />
+            </GroupGate>
+          }
+        />
+        <Route
+          path="/menus/:menuId/edit"
+          element={
+            <GroupGate session={session}>
+              <SharedMenuEditPage session={session} />
+            </GroupGate>
+          }
+        />
+        <Route
           path="/events/:eventId"
           element={
             <GroupGate session={session} allowMissingContext>
@@ -315,6 +342,14 @@ function LiffApp() {
           element={
             <GroupGate session={session}>
               <PreorderEditPage session={session} />
+            </GroupGate>
+          }
+        />
+        <Route
+          path="/events/:eventId/preorders/menu"
+          element={
+            <GroupGate session={session}>
+              <PreorderFromMenuPage session={session} />
             </GroupGate>
           }
         />

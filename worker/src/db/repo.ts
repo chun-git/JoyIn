@@ -972,6 +972,16 @@ export async function cleanupExpiredData(db: D1Database, nowIsoValue: string): P
       .prepare(
         `SELECT event_id FROM events
          WHERE COALESCE(end_at, event_at) < ?
+           AND NOT EXISTS (
+             SELECT 1
+             FROM preorder_orders paid
+             WHERE paid.event_id = events.event_id
+               AND (
+                 paid.payment_reported_at IS NOT NULL
+                 OR paid.payment_confirmed_at IS NOT NULL
+                 OR paid.status = 'FULFILLED'
+               )
+           )
          ORDER BY COALESCE(end_at, event_at) ASC
          LIMIT ?`,
       )
@@ -983,22 +993,85 @@ export async function cleanupExpiredData(db: D1Database, nowIsoValue: string): P
     await preserveEventCandidatesBeforeDelete(db, ids);
 
     const placeholders = ids.map(() => '?').join(', ');
-    const reg = await db
-      .prepare(`DELETE FROM registrations WHERE event_id IN (${placeholders})`)
-      .bind(...ids)
-      .run();
-    registrations += reg.meta.changes ?? 0;
-    const trans = await db
-      .prepare(`DELETE FROM organizer_transfers WHERE event_id IN (${placeholders})`)
-      .bind(...ids)
-      .run();
-    transfers += trans.meta.changes ?? 0;
-    await db
-      .prepare(`DELETE FROM organizer_transfer_invites WHERE event_id IN (${placeholders})`)
-      .bind(...ids)
-      .run();
-    await db.prepare(`DELETE FROM events WHERE event_id IN (${placeholders})`).bind(...ids).run();
-    eventsDeleted += ids.length;
+    const deleted = await db.batch([
+      db
+        .prepare(
+          `DELETE FROM preorder_order_item_options
+           WHERE order_item_id IN (
+             SELECT i.order_item_id
+             FROM preorder_order_items i
+             INNER JOIN preorder_orders o ON o.order_id = i.order_id
+             WHERE o.event_id IN (${placeholders})
+           )`,
+        )
+        .bind(...ids),
+      db
+        .prepare(
+          `DELETE FROM preorder_order_items
+           WHERE order_id IN (
+             SELECT order_id FROM preorder_orders WHERE event_id IN (${placeholders})
+           )`,
+        )
+        .bind(...ids),
+      db
+        .prepare(
+          `DELETE FROM preorder_order_status_history
+           WHERE order_id IN (
+             SELECT order_id FROM preorder_orders WHERE event_id IN (${placeholders})
+           )`,
+        )
+        .bind(...ids),
+      db
+        .prepare(`DELETE FROM preorder_orders WHERE event_id IN (${placeholders})`)
+        .bind(...ids),
+      db
+        .prepare(
+          `DELETE FROM preorder_product_option_values
+           WHERE option_group_id IN (
+             SELECT g.option_group_id
+             FROM preorder_product_option_groups g
+             INNER JOIN preorder_products p ON p.product_id = g.product_id
+             INNER JOIN preorder_offers f ON f.offer_id = p.offer_id
+             WHERE f.event_id IN (${placeholders})
+           )`,
+        )
+        .bind(...ids),
+      db
+        .prepare(
+          `DELETE FROM preorder_product_option_groups
+           WHERE product_id IN (
+             SELECT p.product_id
+             FROM preorder_products p
+             INNER JOIN preorder_offers f ON f.offer_id = p.offer_id
+             WHERE f.event_id IN (${placeholders})
+           )`,
+        )
+        .bind(...ids),
+      db
+        .prepare(
+          `DELETE FROM preorder_products
+           WHERE offer_id IN (
+             SELECT offer_id FROM preorder_offers WHERE event_id IN (${placeholders})
+           )`,
+        )
+        .bind(...ids),
+      db
+        .prepare(`DELETE FROM preorder_offers WHERE event_id IN (${placeholders})`)
+        .bind(...ids),
+      db
+        .prepare(`DELETE FROM registrations WHERE event_id IN (${placeholders})`)
+        .bind(...ids),
+      db
+        .prepare(`DELETE FROM organizer_transfers WHERE event_id IN (${placeholders})`)
+        .bind(...ids),
+      db
+        .prepare(`DELETE FROM organizer_transfer_invites WHERE event_id IN (${placeholders})`)
+        .bind(...ids),
+      db.prepare(`DELETE FROM events WHERE event_id IN (${placeholders})`).bind(...ids),
+    ]);
+    registrations += deleted[8].meta.changes ?? 0;
+    transfers += deleted[9].meta.changes ?? 0;
+    eventsDeleted += deleted[11].meta.changes ?? 0;
     if (ids.length < CLEANUP_BATCH_SIZE) break;
   }
 

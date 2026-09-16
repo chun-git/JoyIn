@@ -187,8 +187,45 @@ export type PreorderOrderStatus =
   | 'CANCELLED'
   | 'FULFILLED';
 
+export type ProductOptionGroupType = 'SINGLE' | 'MULTIPLE' | 'TEXT';
+
+export interface ProductOptionValueInput {
+  optionValueId?: string;
+  name: string;
+  priceAdjustment: number;
+  isActive?: boolean;
+  sortOrder?: number;
+}
+
+export interface ProductOptionGroupInput {
+  optionGroupId?: string;
+  name: string;
+  type: ProductOptionGroupType;
+  isRequired: boolean;
+  minSelections?: number;
+  maxSelections?: number | null;
+  sortOrder?: number;
+  values: ProductOptionValueInput[];
+}
+
+export interface ProductOptionValue extends Required<Omit<ProductOptionValueInput, 'sortOrder'>> {
+  sortOrder: number;
+}
+
+export interface ProductOptionGroup {
+  optionGroupId: string;
+  name: string;
+  type: ProductOptionGroupType;
+  isRequired: boolean;
+  minSelections: number;
+  maxSelections: number | null;
+  sortOrder: number;
+  values: ProductOptionValue[];
+}
+
 export interface PreorderProductInput {
   name: string;
+  description?: string;
   specification?: string | null;
   unitPrice: number;
   quantityLimit?: number | null;
@@ -196,12 +233,17 @@ export interface PreorderProductInput {
   isActive?: boolean;
   /** When editing an existing product. */
   productId?: string;
+  /** Source identifier retained when copied from a shared-menu version. */
+  sourceMenuProductId?: string | null;
+  optionGroups?: ProductOptionGroupInput[];
 }
 
 export interface PreorderProduct {
   productId: string;
   offerId: string;
   name: string;
+  description: string;
+  sourceMenuProductId: string | null;
   specification: string | null;
   unitPrice: number;
   quantityLimit: number | null;
@@ -209,6 +251,7 @@ export interface PreorderProduct {
   remainingQuantity: number | null;
   sortOrder: number;
   isActive: boolean;
+  optionGroups: ProductOptionGroup[];
   createdAt: string;
   updatedAt: string;
 }
@@ -259,6 +302,7 @@ export interface CreatePreorderOfferInput {
   paymentInstructions?: string;
   paymentUrl?: string | null;
   products: PreorderProductInput[];
+  sharedMenuVersionId?: string | null;
 }
 
 export interface UpdatePreorderOfferInput {
@@ -271,9 +315,38 @@ export interface UpdatePreorderOfferInput {
   products?: PreorderProductInput[];
 }
 
+export interface CreatePreorderFromMenuInput {
+  title: string;
+  description?: string;
+  orderDeadline: string;
+  paymentInstructions?: string;
+  paymentUrl?: string | null;
+  menuId: string;
+  menuVersionId: string;
+  selectedMenuProductIds: string[];
+  quantityLimits?: Record<string, number | null>;
+}
+
 export interface PreorderOrderItemInput {
   productId: string;
   quantity: number;
+  options?: PreorderOrderItemOptionInput[];
+}
+
+export interface PreorderOrderItemOptionInput {
+  optionGroupId: string;
+  optionValueIds?: string[];
+  textValue?: string;
+}
+
+export interface PreorderOrderItemOption {
+  orderItemOptionId: string;
+  optionGroupId: string;
+  optionValueId: string | null;
+  groupNameSnapshot: string;
+  optionNameSnapshot: string;
+  priceAdjustmentSnapshot: number;
+  textValueSnapshot: string | null;
 }
 
 export interface PreorderOrderItem {
@@ -282,8 +355,10 @@ export interface PreorderOrderItem {
   productNameSnapshot: string;
   specificationSnapshot: string | null;
   unitPriceSnapshot: number;
+  optionPriceSnapshot: number;
   quantity: number;
   subtotal: number;
+  options: PreorderOrderItemOption[];
 }
 
 export interface PreorderOrder {
@@ -333,3 +408,102 @@ export interface EventPreorderCancelBlock {
   message: string;
   offerTitles: string[];
 }
+
+export type SharedMenuStatus = 'DRAFT' | 'PUBLISHED' | 'DISABLED';
+
+export interface SharedMenuProductInput {
+  menuProductId?: string;
+  name: string;
+  description?: string;
+  basePrice: number;
+  isActive?: boolean;
+  sortOrder?: number;
+  optionGroups?: ProductOptionGroupInput[];
+}
+
+export interface SharedMenuProduct {
+  menuProductId: string;
+  name: string;
+  description: string;
+  basePrice: number;
+  isActive: boolean;
+  sortOrder: number;
+  optionGroups: ProductOptionGroup[];
+}
+
+export interface SharedMenuVersionInput {
+  expectedCurrentVersionId?: string | null;
+  aiParseId?: string | null;
+  merchantName: string;
+  category?: string;
+  description?: string;
+  merchantUrl?: string | null;
+  menuImageUrl?: string | null;
+  sourceUrl?: string | null;
+  products: SharedMenuProductInput[];
+}
+
+export interface SharedMenuSummary {
+  menuId: string;
+  currentVersionId: string | null;
+  merchantName: string;
+  category: string;
+  status: SharedMenuStatus;
+  productCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SharedMenuVersion {
+  versionId: string;
+  menuId: string;
+  versionNumber: number;
+  previousVersionId: string | null;
+  merchantName: string;
+  category: string;
+  description: string;
+  merchantUrl: string | null;
+  menuImageUrl: string | null;
+  sourceUrl: string | null;
+  aiParseId?: string | null;
+  status: SharedMenuStatus;
+  createdByDisplayName?: string;
+  createdAt: string;
+  publishedAt: string | null;
+  products: SharedMenuProduct[];
+}
+
+export interface SharedMenuDetail {
+  menu: SharedMenuSummary;
+  currentVersion: SharedMenuVersion | null;
+}
+
+export interface AiMenuFieldConfidence {
+  value: string | number | null;
+  confidence: number;
+}
+
+export interface AiMenuDraft {
+  parseId: string;
+  cacheHit: boolean;
+  merchantName: AiMenuFieldConfidence;
+  category: AiMenuFieldConfidence;
+  products: Array<{
+    name: AiMenuFieldConfidence;
+    description: AiMenuFieldConfidence;
+    basePrice: AiMenuFieldConfidence;
+    optionGroups: ProductOptionGroupInput[];
+  }>;
+  modelName: string;
+  parsedAt: string;
+}
+
+export interface AiMenuQuota {
+  used: number;
+  limit: number;
+  nextResetAt: string;
+  platformDailyRemaining: number;
+}
+
+export const AI_MENU_DISCLAIMER =
+  'AI 僅協助快速掃描菜單，辨識內容可能有誤。發布前請再次確認品名、價格與選項正確性；JoyIn 不負責辨識錯誤造成的交易爭議。';

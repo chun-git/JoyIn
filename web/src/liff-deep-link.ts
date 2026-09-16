@@ -20,6 +20,8 @@ export function isAllowedTransferToken(token: string): boolean {
  * - /events
  * - /events/new
  * - /events/{uuid}
+ * - /menus and menu editor routes
+ * - preorder routes
  * - /transfer/{token}
  * Reject external, protocol-relative, javascript:, traversal.
  */
@@ -55,6 +57,23 @@ export function sanitizeJoyInRoute(raw: string): string {
 
   if (stripped === '/events' || stripped === '/events/') return '/events';
   if (stripped === '/events/new') return '/events/new';
+  if (stripped === '/menus' || stripped === '/menus/') return '/menus';
+  if (stripped === '/menus/new') return '/menus/new';
+
+  const menuMatch = stripped.match(/^\/menus\/([^/]+)\/edit\/?$/);
+  if (menuMatch && isAllowedEventId(menuMatch[1])) return `/menus/${menuMatch[1]}/edit`;
+
+  const preorderMatch = stripped.match(/^\/preorders\/([^/]+)(\/(?:edit|manage))?\/?$/);
+  if (preorderMatch && isAllowedEventId(preorderMatch[1])) {
+    return `/preorders/${preorderMatch[1]}${preorderMatch[2] || ''}`;
+  }
+
+  const eventPreorderMatch = stripped.match(
+    /^\/events\/([^/]+)\/preorders\/(new|menu)\/?$/,
+  );
+  if (eventPreorderMatch && isAllowedEventId(eventPreorderMatch[1])) {
+    return `/events/${eventPreorderMatch[1]}/preorders/${eventPreorderMatch[2]}`;
+  }
 
   const eventMatch = stripped.match(/^\/events\/([^/]+)\/?$/);
   if (eventMatch && isAllowedEventId(eventMatch[1])) {

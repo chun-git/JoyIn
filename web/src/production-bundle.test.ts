@@ -4,15 +4,19 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * Guards production Pages bundle against accidentally shipping DEV_AUTH / test tokens.
- * Expects `npm run build` to have produced web/dist beforehand when run in CI locally after build.
+ * CI must build web/dist before tests; a missing CI bundle is a failed safety check.
  */
 describe('production bundle auth safety', () => {
-  it('does not embed VITE_DEV_AUTH=true or test: auth tokens when dist exists', () => {
+  it('does not embed VITE_DEV_AUTH=true or test: auth tokens in the production bundle', () => {
     const distDir = path.resolve(__dirname, '../dist/assets');
     let files: string[] = [];
     try {
       files = readdirSync(distDir).filter((name) => name.endsWith('.js'));
     } catch {
+      if (process.env.CI) {
+        throw new Error('CI 必須先執行 npm run build:web，production bundle 不可跳過檢查');
+      }
+      // Local focused tests may intentionally run without building the production bundle.
       expect(true).toBe(true);
       return;
     }

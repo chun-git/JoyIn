@@ -40,13 +40,14 @@ import {
   refreshExpiredContext,
 } from '../services/context-recovery';
 import { preorderRoutes } from './preorders';
+import { menuRoutes } from './menus';
 import type { CopyEventInput, UpdateEventInput } from '../../../shared/types';
 
 export const api = new Hono<AppEnv>();
 
 api.onError((err, c) => {
   const { status, body } = handleRouteError(err);
-  return c.json(body, status as 400 | 401 | 403 | 404 | 409 | 410 | 429 | 500 | 502);
+  return c.json(body, status as 400 | 401 | 403 | 404 | 408 | 409 | 410 | 422 | 429 | 500 | 502);
 });
 
 function requirePreselectedMemberIds(value: unknown): string[] {
@@ -101,8 +102,11 @@ api.use('/transfer-invites/*', liffAuth);
 api.use('/context/*', liffAuth);
 api.use('/group/*', liffAuth);
 api.use('/preorders/*', liffAuth);
+api.use('/menus/*', liffAuth);
+api.use('/menus', liffAuth);
 
 api.route('/', preorderRoutes);
+api.route('/', menuRoutes);
 
 /**
  * Refresh an expired group context when HMAC is still valid and the user is a group member.
