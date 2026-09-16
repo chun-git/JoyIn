@@ -124,6 +124,18 @@ export async function joinSelf(
   if (!saved) {
     throw Errors.notFound('報名失敗');
   }
+  const savedParticipantId =
+    (saved.participant_line_user_id || '').trim() ||
+    (saved.type === 'SELF' ? (saved.line_user_id || '').trim() : '');
+  if (
+    saved.event_id !== event.event_id ||
+    event.group_id !== groupId ||
+    saved.type !== 'SELF' ||
+    savedParticipantId !== user.lineUserId
+  ) {
+    await deleteRegistrationRow(db, registrationId);
+    throw Errors.conflict('報名資料驗證失敗，請重新整理後再試');
+  }
   return toRegistrationRecord(saved, user.lineUserId, event.organizer_line_user_id);
 }
 

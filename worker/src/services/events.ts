@@ -17,6 +17,7 @@ import {
 } from '../lib/datetime';
 import { newId, toRegistrationRecord } from '../lib/ids';
 import {
+  findSelfRegistration,
   getEventRow,
   listHistoryEventsForUser,
   listRegistrations,
@@ -167,6 +168,7 @@ export async function getEventDetail(
   const ended = isExpired(endAtOf(row));
   const summary = toEventSummary(row);
   const registrations = await listRegistrations(db, eventId);
+  const selfRegistrationRow = await findSelfRegistration(db, eventId, user.lineUserId);
   let records = registrations.map((item) =>
     toRegistrationRecord(item, user.lineUserId, row.organizer_line_user_id),
   );
@@ -187,12 +189,9 @@ export async function getEventDetail(
     viewer: {
       isOrganizer: user.lineUserId === row.organizer_line_user_id,
       selfRegistration:
-        records.find(
-          (item) =>
-            item.type === 'SELF' &&
-            (item.participantLineUserId === user.lineUserId ||
-              item.lineUserId === user.lineUserId),
-        ) ?? null,
+        (selfRegistrationRow
+          ? records.find((item) => item.registrationId === selfRegistrationRow.registration_id)
+          : null) ?? null,
       proxyRegistrations: records.filter(
         (item) => item.type === 'PROXY' && item.createdByLineUserId === user.lineUserId,
       ),

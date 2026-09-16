@@ -140,6 +140,54 @@ describe('EventDetailPage layout and cancel flow', () => {
     expect(copyIdx).toBeGreaterThan(joinIdx);
   });
 
+  it('shows join success only after the reloaded event confirms the same SELF registration', async () => {
+    const user = userEvent.setup();
+    const before = detail({
+      confirmedCount: 0,
+      waitlistCount: 0,
+      registrations: { confirmed: [], waitlist: [] },
+      viewer: { isOrganizer: false, selfRegistration: null, proxyRegistrations: [] },
+    });
+    const saved = reg({});
+    const after = detail({
+      confirmedCount: 1,
+      waitlistCount: 0,
+      registrations: { confirmed: [saved], waitlist: [] },
+      viewer: { isOrganizer: false, selfRegistration: saved, proxyRegistrations: [] },
+    });
+    getEvent.mockResolvedValueOnce({ event: before }).mockResolvedValueOnce({ event: after });
+    join.mockResolvedValue({ registration: saved });
+
+    renderDetail();
+    await user.click(await screen.findByRole('button', { name: '本人報名' }));
+
+    expect(await screen.findByText('報名成功')).toBeInTheDocument();
+    expect(screen.getByText(/你已報名/)).toBeInTheDocument();
+    expect(join).toHaveBeenCalledWith(session, 'e1');
+    expect(getEvent).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not show success when the join response identity does not match the current event', async () => {
+    const user = userEvent.setup();
+    const before = detail({
+      confirmedCount: 0,
+      waitlistCount: 0,
+      registrations: { confirmed: [], waitlist: [] },
+      viewer: { isOrganizer: false, selfRegistration: null, proxyRegistrations: [] },
+    });
+    getEvent.mockResolvedValueOnce({ event: before });
+    join.mockResolvedValue({
+      registration: reg({ eventId: 'different-event' }),
+    });
+
+    renderDetail();
+    await user.click(await screen.findByRole('button', { name: '本人報名' }));
+
+    expect(await screen.findByText(/報名資料與目前活動或 LINE 身分不一致/)).toBeInTheDocument();
+    expect(screen.queryByText('報名成功')).not.toBeInTheDocument();
+    expect(getEvent).toHaveBeenCalledTimes(1);
+  });
+
   it('does not call cancel API until 確認取消 is pressed', async () => {
     const user = userEvent.setup();
     renderDetail();

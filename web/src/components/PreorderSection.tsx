@@ -47,10 +47,16 @@ export function PreorderSection({
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setHasLoaded(false);
+    setOffers([]);
+    setCanCreatePreorder(false);
+    setPreorderRestrictionReason(null);
+    setError('');
     void load()
       .catch((err) => {
         if (cancelled) return;
-        setError((prev) => prev || preorderErrorMessage(err, '無法載入代訂服務'));
+        setPreorderRestrictionReason(null);
+        setError(preorderErrorMessage(err, '無法載入代訂服務或確認點餐資格'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

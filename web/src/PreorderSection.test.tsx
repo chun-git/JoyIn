@@ -8,11 +8,16 @@ import type { LiffSession } from './liff';
 
 const listEventPreorders = vi.fn();
 
-vi.mock('./api', () => ({
-  api: {
-    listEventPreorders: (...args: unknown[]) => listEventPreorders(...args),
-  },
-}));
+vi.mock('./api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./api')>();
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      listEventPreorders: (...args: unknown[]) => listEventPreorders(...args),
+    },
+  };
+});
 
 const css = readFileSync(path.join(__dirname, 'index.css'), 'utf8');
 const orderPageSource = readFileSync(
@@ -76,5 +81,16 @@ describe('preorder UI', () => {
     expect(css).toMatch(/\.preorder-meta-grid,[\s\S]*font-size:\s*14px/);
     expect(css).toMatch(/\.preorder-product-actions\s*\{[\s\S]*flex-wrap:\s*wrap/);
     expect(css).toMatch(/\.preorder-cart-summary\s*\{[\s\S]*min-width:\s*0/);
+  });
+
+  it('does not turn a qualification API failure into an unregistered message', async () => {
+    listEventPreorders.mockRejectedValueOnce(new Error('資格服務暫時無法使用'));
+    render(
+      <MemoryRouter>
+        <PreorderSection session={session} eventId="evt-error" />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('資格服務暫時無法使用')).toBeInTheDocument();
+    expect(screen.queryByText('尚未報名此活動，無法使用代訂功能')).not.toBeInTheDocument();
   });
 });

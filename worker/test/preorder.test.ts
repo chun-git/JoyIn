@@ -54,7 +54,63 @@ describe('preorder role capabilities (organizer A vs participant B)', () => {
     const created = await createEvent('U-cap-org', '主揪A', { capacity: 5 });
     const eventId = created.body.event.eventId;
     await join('U-cap-org', '主揪A', eventId);
-    await join('U-cap-b', '參加者B', eventId);
+    const joinedB = await join('U-cap-b', '參加者B', eventId);
+    expect(joinedB.status).toBe(201);
+    expect(joinedB.body).toMatchObject({
+      registration: {
+        eventId,
+        type: 'SELF',
+        status: 'CONFIRMED',
+        participantLineUserId: 'U-cap-b',
+      },
+    });
+    const storedB = await env.DB
+      .prepare(
+        `SELECT event_id, type, status, participant_line_user_id
+         FROM registrations
+         WHERE event_id = ? AND participant_line_user_id = ?`,
+      )
+      .bind(eventId, 'U-cap-b')
+      .first<{
+        event_id: string;
+        type: string;
+        status: string;
+        participant_line_user_id: string;
+      }>();
+    expect(storedB).toEqual({
+      event_id: eventId,
+      type: 'SELF',
+      status: 'CONFIRMED',
+      participant_line_user_id: 'U-cap-b',
+    });
+
+    const reopenedB = await json<{
+      event: {
+        eventId: string;
+        groupId: string;
+        viewer: {
+          isOrganizer: boolean;
+          selfRegistration: {
+            eventId: string;
+            type: string;
+            status: string;
+            participantLineUserId: string;
+          } | null;
+        };
+      };
+    }>(`/api/events/${eventId}`, {
+      headers: await authHeaders('U-cap-b', '參加者B'),
+    });
+    expect(reopenedB.status).toBe(200);
+    expect(reopenedB.body.event.eventId).toBe(eventId);
+    expect(reopenedB.body.event.groupId).toBe('G-test-group');
+    expect(reopenedB.body.event.viewer.isOrganizer).toBe(false);
+    expect(reopenedB.body.event.viewer.selfRegistration).toMatchObject({
+      eventId,
+      type: 'SELF',
+      status: 'CONFIRMED',
+      participantLineUserId: 'U-cap-b',
+    });
 
     const listB = await json<{
       canCreatePreorder: boolean;
@@ -192,6 +248,69 @@ describe('preorder role capabilities (organizer A vs participant B)', () => {
       title: 'participant-id 代訂',
     });
     expect(createdOffer.status).toBe(201);
+  });
+
+  it('uses the same canonical participant identity for event and preorder eligibility', async () => {
+    const created = await createEvent('U-canonical-org', '主揪', { capacity: 3 });
+    const eventId = created.body.event.eventId;
+    const now = new Date().toISOString();
+    await env.DB
+      .prepare(
+        `INSERT INTO registrations (
+          registration_id, event_id, type, status, waitlist_position,
+          participant_name, line_user_id, created_by_line_user_id,
+          created_by_display_name, created_at, updated_at,
+          registration_source, participant_line_user_id
+        ) VALUES (?, ?, 'SELF', 'CONFIRMED', NULL, ?, ?, ?, ?, ?, ?, 'ORGANIZER_PRESELECT', ?)`,
+      )
+      .bind(
+        'reg-canonical-mismatch',
+        eventId,
+        '真正參加者',
+        'U-legacy-viewer',
+        'U-canonical-org',
+        '主揪',
+        now,
+        now,
+        'U-actual-participant',
+      )
+      .run();
+
+    const eventForLegacy = await json<{
+      event: { viewer: { selfRegistration: unknown | null } };
+    }>(`/api/events/${eventId}`, {
+      headers: await authHeaders('U-legacy-viewer', '舊欄位帳號'),
+    });
+    expect(eventForLegacy.status).toBe(200);
+    expect(eventForLegacy.body.event.viewer.selfRegistration).toBeNull();
+    const preorderForLegacy = await json<{
+      canCreatePreorder: boolean;
+      preorderRestrictionReason: string | null;
+    }>(`/api/events/${eventId}/preorders`, {
+      headers: await authHeaders('U-legacy-viewer', '舊欄位帳號'),
+    });
+    expect(preorderForLegacy.body.canCreatePreorder).toBe(false);
+    expect(preorderForLegacy.body.preorderRestrictionReason).toContain('尚未報名');
+  });
+
+  it('does not persist or report success when joining through the wrong group context', async () => {
+    const created = await createEvent('U-join-fail-org', '主揪', { capacity: 3 });
+    const eventId = created.body.event.eventId;
+    const failed = await json<{ error: string }>(`/api/events/${eventId}/join`, {
+      method: 'POST',
+      headers: await authHeaders('U-join-fail-b', '參加者B', 'G-other'),
+    });
+    expect(failed.status).toBe(404);
+    expect(failed.body.error).toBe('event_not_found');
+    const stored = await env.DB
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM registrations
+         WHERE event_id = ? AND participant_line_user_id = ?`,
+      )
+      .bind(eventId, 'U-join-fail-b')
+      .first<{ count: number }>();
+    expect(stored?.count).toBe(0);
   });
 });
 

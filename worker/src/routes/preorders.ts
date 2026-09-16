@@ -185,6 +185,7 @@ preorderRoutes.get(
       operation: 'list_event_preorders',
       offerPresent: result.offers.length > 0,
       orderPresent: result.offers.some((o) => o.myOrderStatus != null),
+      canCreatePreorder: result.canCreatePreorder,
     });
     return c.json(result);
   }),
@@ -299,6 +300,9 @@ preorderRoutes.get(
       operation: 'get_preorder_offer',
       offerPresent: true,
       orderPresent: offer.myOrderStatus != null,
+      canCreatePreorder: offer.viewer.canCreatePreorder,
+      canOrder: offer.viewer.canOrder,
+      canManagePreorder: offer.viewer.canManagePreorder,
     });
     return c.json({ offer });
   }),

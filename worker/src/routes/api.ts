@@ -229,9 +229,35 @@ api.patch('/events/:eventId', async (c) => {
 });
 
 api.post('/events/:eventId/join', async (c) => {
+  const requestId = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+  c.header('X-Request-Id', requestId);
   const groupId = requireGroupId(c);
-  const registration = await joinSelf(c.env.DB, c.req.param('eventId'), userOf(c), groupId);
-  return c.json({ registration }, 201);
+  const eventId = c.req.param('eventId');
+  const user = userOf(c);
+  try {
+    const registration = await joinSelf(c.env.DB, eventId, user, groupId);
+    console.info('[JoyIn registration]', {
+      requestId,
+      operation: 'join_self',
+      status: 201,
+      eventMatch: registration.eventId === eventId,
+      participantMatch: registration.participantLineUserId === user.lineUserId,
+      registrationType: registration.type,
+      registrationStatus: registration.status,
+    });
+    return c.json({ registration }, 201);
+  } catch (error) {
+    console.info('[JoyIn registration]', {
+      requestId,
+      operation: 'join_self',
+      status: error instanceof AppError ? error.status : 500,
+      errorCode: error instanceof AppError ? error.code : 'INTERNAL',
+      eventParamPresent: Boolean(eventId),
+      groupContextPresent: Boolean(groupId),
+      verifiedUserPresent: Boolean(user.lineUserId),
+    });
+    throw error;
+  }
 });
 
 api.post('/events/:eventId/proxy-join', async (c) => {

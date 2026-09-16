@@ -15,6 +15,7 @@ import type {
   PreorderProduct,
   PreorderProductInput,
   PreselectMemberRoster,
+  RegistrationRecord,
   AiMenuDraft,
   AiMenuQuota,
   SharedMenuDetail,
@@ -228,7 +229,9 @@ export const api = {
       body: JSON.stringify(input),
     }),
   join: (session: LiffSession, eventId: string) =>
-    request(`/api/events/${eventId}/join`, session, { method: 'POST' }),
+    request<{ registration: RegistrationRecord }>(`/api/events/${eventId}/join`, session, {
+      method: 'POST',
+    }),
   proxyJoin: (session: LiffSession, eventId: string, participantName: string) =>
     request(`/api/events/${eventId}/proxy-join`, session, {
       method: 'POST',

@@ -188,6 +188,41 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
     }
   }
 
+  async function joinCurrentUser() {
+    if (pending || !event) return;
+    setPending(true);
+    setError('');
+    try {
+      const created = await api.join(session, eventId);
+      const registration = created.registration;
+      if (
+        registration.eventId !== eventId ||
+        registration.type !== 'SELF' ||
+        registration.participantLineUserId !== session.lineUserId
+      ) {
+        throw new Error('報名資料與目前活動或 LINE 身分不一致，請重新開啟活動後再試');
+      }
+      const reloaded = await api.getEvent(session, eventId);
+      const saved = reloaded.event.viewer.selfRegistration;
+      if (
+        reloaded.event.eventId !== eventId ||
+        reloaded.event.groupId !== event.groupId ||
+        !saved ||
+        saved.registrationId !== registration.registrationId ||
+        saved.type !== 'SELF' ||
+        saved.participantLineUserId !== session.lineUserId
+      ) {
+        throw new Error('報名已送出，但重新驗證失敗；請勿重複操作，重新開啟活動確認');
+      }
+      setEvent(reloaded.event);
+      setNotice(saved.status === 'WAITLIST' ? '已加入候補' : '報名成功');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '報名失敗');
+    } finally {
+      setPending(false);
+    }
+  }
+
   async function openCancel(item: RegistrationRecord) {
     if (isHistory) return;
     setCancelError('');
@@ -324,7 +359,7 @@ export function EventDetailPage({ session }: { session: LiffSession }) {
               className="btn"
               type="button"
               disabled={!canJoin || pending}
-              onClick={() => run(() => api.join(session, eventId), full ? '已加入候補' : '報名成功')}
+              onClick={() => void joinCurrentUser()}
             >
               {joinLabel}
             </button>

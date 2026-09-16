@@ -7,6 +7,9 @@ export type PreorderLogMeta = {
   offerPresent?: boolean | null;
   orderPresent?: boolean | null;
   idempotencyHit?: boolean | null;
+  canCreatePreorder?: boolean | null;
+  canOrder?: boolean | null;
+  canManagePreorder?: boolean | null;
 };
 
 export function newRequestId(): string {
@@ -30,6 +33,9 @@ export function logPreorderEvent(
     offerPresent: meta.offerPresent ?? null,
     orderPresent: meta.orderPresent ?? null,
     idempotencyHit: meta.idempotencyHit ?? null,
+    canCreatePreorder: meta.canCreatePreorder ?? null,
+    canOrder: meta.canOrder ?? null,
+    canManagePreorder: meta.canManagePreorder ?? null,
   };
   if (status >= 500) {
     console.error('[JoyIn preorder]', payload);
