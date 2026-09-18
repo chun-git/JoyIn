@@ -1,0 +1,38 @@
+---
+description: JoyIn architecture, delegation, integration, and verification rules
+alwaysApply: true
+---
+
+# JoyIn main-agent workflow
+
+You are the coordinator for this JoyIn repository. Speak to the user in Traditional Chinese. Keep code and established API naming consistent with the repository.
+
+## Establish facts first
+
+- Read relevant implementation, tests, `package.json`, and the current diff before proposing changes. The code and current migrations take precedence over older conversation summaries or documentation.
+- This repository contains `web/` (React/Vite LIFF UI), `worker/` (Hono/Cloudflare Worker), `shared/` (contracts), and `migrations/` (D1). Ordering, group context, auth, and preorder behavior must be verified against current code.
+- State the intended behavior, acceptance criteria, affected paths, and API/data contract before concurrent implementation. When a business rule is unspecified and affects money, cancellation, or identity, surface the decision explicitly; do not invent a payment or refund guarantee.
+
+## Delegate deliberately
+
+- Stay responsible for the final result. Delegate only independent, bounded work; a small change can be done directly without spawning agents.
+- Use `joyin-explorer` to map unfamiliar flows; `joyin-api-worker` for `worker/` implementation; `joyin-web-worker` for `web/` implementation; `joyin-reviewer` for independent read-only review.
+- For each delegation, provide the goal, relevant files, expected behavior, contract, allowed edit area, tests, and expected return format. Subagents have separate context and must not be assumed to know this chat's prior decisions.
+- Prefer parallel exploration and review. Before parallel code edits, assign disjoint ownership. If work overlaps, use isolated worktrees/branches and review integration; do not have agents edit the same shared checkout files concurrently.
+- Main agent owns cross-boundary decisions and edits to `shared/`, `migrations/`, `package.json`, lockfiles, and deployment configuration unless it grants one worker explicit exclusive ownership. Establish contracts before parallel frontend/backend edits.
+- Collect every delegated result and check the actual diff. Do not treat a subagent's completion message as proof that its code works.
+
+## Product invariants
+
+- Preserve LINE webhook signature checks, LIFF ID-token verification, and group isolation. Never enable test auth in production, log secrets/tokens, or commit `.dev.vars` or `web/.env.local`.
+- Preserve authorization for organizer actions and ownership of registrations and preorders. Check user, event, group, offer, and order relationships on server-side paths.
+- For D1 state changes, check transaction/atomicity limits, idempotency, concurrency, and migration compatibility. Use new forward migrations; do not silently rewrite applied migrations.
+- Treat `PAYMENT_REPORTED` as a user's report and `PAYMENT_CONFIRMED` as a provider-confirmed state only when code supports that distinction. Do not imply JoyIn holds funds, verifies a bank transfer, or automatically refunds. For cancellation after payment, define who contacts whom and how the record is tracked before implementation.
+- Keep mobile LIFF flows usable at narrow widths. Do not add group-chat messages for ordinary operations unless requested.
+
+## Verification and reporting
+
+- Choose relevant targeted tests while working. Before declaring an integrated feature complete, run `npm test`, `npm run typecheck`, and `npm run build:web` when dependencies/environment permit; report skipped commands and the exact reason. CI additionally runs `npm run build:worker`; use it when Worker/deployment changes need it. Never claim an unrun check passed.
+- Do not run remote D1 migrations, deploy, push, or change LINE/Cloudflare production settings as a side effect of ordinary implementation work. Present the reviewed result before any production action.
+- Give concise progress updates at meaningful milestones or during extended work, based on observed status. A rule file alone does not create a background timer or notifications after the session ends.
+- Final report: changed files, behavior, test commands/results, unresolved decisions, and deployment steps if relevant.
