@@ -37,6 +37,12 @@ export function preorderErrorMessage(err: unknown, fallback = '操作失敗'): s
   if (message.includes('已取消') && message.includes('代訂')) {
     return '代訂已取消';
   }
+  if (message.includes('已回報處理，無需重複回報')) {
+    return '已回報處理，無需重複回報';
+  }
+  if (message.includes('此訂單無需款項處理紀錄')) {
+    return '此訂單無需款項處理紀錄';
+  }
   return message || fallback;
 }
 

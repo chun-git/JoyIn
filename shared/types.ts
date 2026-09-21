@@ -179,6 +179,52 @@ export interface ApiErrorBody {
 export const PREORDER_PAYMENT_DISCLAIMER =
   '商品款由訂購者直接支付代訂者，JoyIn 不代收商品費用。';
 
+/** Settlement records are independent of order status (which stays CANCELLED). */
+export type PreorderPaymentSettlementStatus =
+  | 'AWAITING_RECEIPT_CHECK'
+  | 'REFUND_PENDING'
+  | 'PROVIDER_REPORTED_SETTLED';
+
+export type PreorderPaymentSettlementSourceStatus = 'PAYMENT_REPORTED' | 'PAYMENT_CONFIRMED';
+
+export const PREORDER_SETTLEMENT_STATUS_LABEL: Record<PreorderPaymentSettlementStatus, string> = {
+  AWAITING_RECEIPT_CHECK: '尚待確認是否收款',
+  REFUND_PENDING: '待處理退款',
+  PROVIDER_REPORTED_SETTLED: '代訂者已回報處理',
+};
+
+export const PREORDER_SETTLEMENT_STATUS_DETAIL: Record<PreorderPaymentSettlementStatus, string> = {
+  AWAITING_RECEIPT_CHECK:
+    '買家曾回報付款，尚待確認代訂者是否收款。JoyIn 不驗證轉帳。',
+  REFUND_PENDING:
+    '代訂者曾確認收款，取消後待處理退款。JoyIn 不代退，也不驗證是否已退款。',
+  PROVIDER_REPORTED_SETTLED:
+    '代訂者已回報已處理此筆款項。這是代訂者的回報，JoyIn 未驗證款項是否結清。',
+};
+
+export const PREORDER_SETTLEMENT_NO_PUSH_NOTICE =
+  '此頁不會另外發送 LINE 通知，請以本頁進度為準。';
+
+export const PREORDER_REORDER_OPEN_SETTLEMENT_REMINDER =
+  '你仍有前一筆取消訂單的款項尚未處理完成。送出新訂單不會自動結清或退款，JoyIn 也不會另外通知對方。';
+
+export const PREORDER_PROVIDER_CANCEL_REPORTED_HINT =
+  '此訂單為買家回報付款，系統未驗證是否已轉帳。取消後會留下款項處理紀錄，請自行確認是否收款並回報處理結果。JoyIn 不代收、不代退，也不會發送 LINE 通知。';
+
+export const PREORDER_PROVIDER_CANCEL_CONFIRMED_HINT =
+  '此訂單已確認收款。取消後請自行與買家處理退款，並在處理後回報。JoyIn 不代退，也不會發送 LINE 通知。代訂者回報不代表 JoyIn 已驗證退款成功。';
+
+export const PREORDER_PROVIDER_REPORT_SETTLED_HINT =
+  '回報已處理後，買家可在訂購頁看到進度。這只記錄你的回報，JoyIn 不會驗證是否已退款或未收到款，也不會發送 LINE 通知。';
+
+export const PREORDER_CANCELLED_WITHOUT_SETTLEMENT = '此筆取消無需款項處理。';
+
+export function isOpenPaymentSettlement(
+  settlement: PreorderPaymentSettlement | null | undefined,
+): boolean {
+  return Boolean(settlement && settlement.status !== 'PROVIDER_REPORTED_SETTLED');
+}
+
 export type PreorderOfferStatus = 'OPEN' | 'CLOSED' | 'CANCELLED';
 export type PreorderOrderStatus =
   | 'PENDING_PAYMENT'
@@ -361,6 +407,37 @@ export interface PreorderOrderItem {
   options: PreorderOrderItemOption[];
 }
 
+export interface PreorderPaymentSettlementHistoryEntry {
+  historyId: string;
+  fromStatus: PreorderPaymentSettlementStatus | null;
+  toStatus: PreorderPaymentSettlementStatus;
+  actorLineUserId: string;
+  actorDisplayName: string;
+  note: string | null;
+  createdAt: string;
+}
+
+export interface PreorderPaymentSettlement {
+  settlementId: string;
+  orderId: string;
+  offerId: string;
+  status: PreorderPaymentSettlementStatus;
+  sourceOrderStatus: PreorderPaymentSettlementSourceStatus;
+  latestNote: string | null;
+  settledReportedAt: string | null;
+  settledReportedByLineUserId: string | null;
+  settledReportedByDisplayName: string | null;
+  createdByLineUserId: string;
+  createdByDisplayName: string;
+  createdAt: string;
+  updatedAt: string;
+  history: PreorderPaymentSettlementHistoryEntry[];
+}
+
+export interface ReportPreorderSettlementHandledInput {
+  note: string;
+}
+
 export interface PreorderOrder {
   orderId: string;
   offerId: string;
@@ -374,8 +451,14 @@ export interface PreorderOrder {
   paymentConfirmedAt: string | null;
   fulfilledAt: string | null;
   items: PreorderOrderItem[];
+  paymentSettlement: PreorderPaymentSettlement | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface MyPreorderOrderResponse {
+  order: PreorderOrder | null;
+  cancelledOrders: PreorderOrder[];
 }
 
 export interface PreorderProductAggregate {

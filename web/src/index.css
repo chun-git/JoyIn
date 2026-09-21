@@ -1256,6 +1256,43 @@ section h2 { margin: 0 0 10px; font-size: 18px; }
 .preorder-my-order.tone-cancelled {
   color: #9aa3ad;
 }
+.preorder-status.tone-settled {
+  color: #3d5a73;
+}
+.preorder-settlement {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.preorder-settlement-history {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.preorder-settlement-history li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.preorder-settlement-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  color: var(--muted, #687786);
+  font-size: 13px;
+}
+.preorder-settlement-meta strong {
+  color: #12324a;
+}
+.preorder-order-card .row,
+.preorder-order-card .preorder-card-actions {
+  width: 100%;
+}
 .preorder-card-actions,
 .preorder-actions,
 .preorder-qty-controls {

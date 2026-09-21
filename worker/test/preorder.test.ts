@@ -642,10 +642,14 @@ describe('preorder MVP', () => {
     );
     expect(put.body.order.status).toBe('PENDING_PAYMENT');
 
-    const otherMine = await json<{ order: null }>(`/api/preorders/${offerId}/my-order`, {
-      headers: await authHeaders('U-other6', '其他6'),
-    });
+    const otherMine = await json<{ order: null; cancelledOrders: unknown[] }>(
+      `/api/preorders/${offerId}/my-order`,
+      {
+        headers: await authHeaders('U-other6', '其他6'),
+      },
+    );
     expect(otherMine.body.order).toBeNull();
+    expect(otherMine.body.cancelledOrders).toEqual([]);
 
     const allDenied = await json(`/api/preorders/${offerId}/orders`, {
       headers: await authHeaders('U-other6', '其他6'),

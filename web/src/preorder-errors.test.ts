@@ -13,6 +13,12 @@ describe('preorderErrorMessage', () => {
     );
     expect(preorderErrorMessage(new Error('無權管理此代訂'))).toContain('無權管理');
     expect(preorderErrorMessage(new Error('代訂已關閉'))).toContain('已關閉');
+    expect(preorderErrorMessage(new Error('已回報處理，無需重複回報'))).toBe(
+      '已回報處理，無需重複回報',
+    );
+    expect(preorderErrorMessage(new Error('此訂單無需款項處理紀錄'))).toBe(
+      '此訂單無需款項處理紀錄',
+    );
     expect(preorderErrorMessage(new Error('Failed to fetch'))).toBe('連線失敗，請重新整理');
   });
 

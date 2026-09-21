@@ -28,6 +28,7 @@ import {
   previewRegistrationCancelPreorderImpact,
   removePreorderProduct,
   reportMyPreorderPayment,
+  reportPreorderSettlementHandled,
   updatePreorderOffer,
   updatePreorderProduct,
   upsertMyPreorderOrder,
@@ -472,13 +473,13 @@ preorderRoutes.get(
   '/preorders/:offerId/my-order',
   withPreorderLog('get_my_order', async (c) => {
     const groupId = requireGroupId(c);
-    const order = await getMyPreorderOrder(c.env.DB, routeParam(c, 'offerId'), userOf(c), groupId);
+    const result = await getMyPreorderOrder(c.env.DB, routeParam(c, 'offerId'), userOf(c), groupId);
     setPreorderMeta(c, {
       operation: 'get_my_order',
       offerPresent: true,
-      orderPresent: order != null,
+      orderPresent: result.order != null,
     });
-    return c.json({ order });
+    return c.json(result);
   }),
 );
 
@@ -548,6 +549,28 @@ preorderRoutes.post(
       groupId,
     );
     setPreorderMeta(c, { operation: 'fulfill_order', offerPresent: true, orderPresent: true });
+    return c.json({ order });
+  }),
+);
+
+preorderRoutes.post(
+  '/preorders/:offerId/orders/:orderId/settlement/report-handled',
+  withPreorderLog('report_settlement_handled', async (c) => {
+    const groupId = requireGroupId(c);
+    const body = parseJson<Record<string, unknown>>(await c.req.json());
+    const order = await reportPreorderSettlementHandled(
+      c.env.DB,
+      routeParam(c, 'offerId'),
+      routeParam(c, 'orderId'),
+      userOf(c),
+      groupId,
+      requireString(body.note, '處理說明', 1, 200),
+    );
+    setPreorderMeta(c, {
+      operation: 'report_settlement_handled',
+      offerPresent: true,
+      orderPresent: true,
+    });
     return c.json({ order });
   }),
 );

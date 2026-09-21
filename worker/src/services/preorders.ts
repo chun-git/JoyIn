@@ -2,6 +2,7 @@ import type {
   CreatePreorderOfferInput,
   CreatePreorderFromMenuInput,
   EventPreorderListResponse,
+  MyPreorderOrderResponse,
   PreorderOfferDetail,
   PreorderOfferOrderSummary,
   PreorderOfferSummary,
@@ -10,6 +11,9 @@ import type {
   PreorderOrderItemInput,
   PreorderOrderItemOption,
   PreorderOrderStatus,
+  PreorderPaymentSettlement,
+  PreorderPaymentSettlementHistoryEntry,
+  PreorderPaymentSettlementStatus,
   PreorderProduct,
   PreorderProductInput,
   PreorderViewerCapabilities,
@@ -21,6 +25,8 @@ import {
   adjustProductOrderedQuantity,
   cancelEmptyOffersForProvider,
   cancelOpenOrdersForBuyerOnEvent,
+  PreorderCancelBatchConflict,
+  PreorderCancelBatchTooLarge,
   countActiveOrdersForEvent,
   countActiveOrdersForEventOffersByProvider,
   countActiveOrdersForOffer,
@@ -31,17 +37,23 @@ import {
   deletePreorderOrderItems,
   deletePreorderProductIfUnused,
   getActiveOrderForBuyer,
+  getOrderByIdempotencyKey,
   getPreorderOffer,
   getPreorderOrder,
+  getPreorderPaymentSettlementByOrderId,
   getPreorderProduct,
   insertOrderStatusHistory,
   insertPreorderOrder,
   insertPreorderOrderItem,
   insertPreorderProduct,
+  cancelSingleOrderAtomic,
+  reportSettlementHandledAtomic,
+  listCancelledOrdersForBuyerOnOffer,
   listPreorderOffersForEvent,
   listPreorderOrderItems,
   listPreorderOrderItemsForOrders,
   listPreorderOrdersForOffer,
+  listPreorderPaymentSettlementHistory,
   listPreorderProducts,
   prepareInsertPreorderProduct,
   prepareInsertPreorderOffer,
@@ -62,6 +74,8 @@ import {
   type PreorderOptionValueRow,
   type PreorderOrderItemRow,
   type PreorderOrderRow,
+  type PreorderPaymentSettlementHistoryRow,
+  type PreorderPaymentSettlementRow,
   type PreorderProductRow,
 } from '../db/preorder-repo';
 import { findSelfRegistration } from '../db/repo';
@@ -453,6 +467,84 @@ function toOrderItem(
   };
 }
 
+function toPaymentSettlement(
+  row: PreorderPaymentSettlementRow,
+  historyRows: PreorderPaymentSettlementHistoryRow[],
+): PreorderPaymentSettlement {
+  return {
+    settlementId: row.settlement_id,
+    orderId: row.order_id,
+    offerId: row.offer_id,
+    status: row.status,
+    sourceOrderStatus: row.source_order_status,
+    latestNote: row.latest_note,
+    settledReportedAt: row.settled_reported_at,
+    settledReportedByLineUserId: row.settled_reported_by_line_user_id,
+    settledReportedByDisplayName: row.settled_reported_by_display_name,
+    createdByLineUserId: row.created_by_line_user_id,
+    createdByDisplayName: row.created_by_display_name,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    history: historyRows.map(
+      (entry): PreorderPaymentSettlementHistoryEntry => ({
+        historyId: entry.history_id,
+        fromStatus: entry.from_status,
+        toStatus: entry.to_status,
+        actorLineUserId: entry.actor_line_user_id,
+        actorDisplayName: entry.actor_display_name,
+        note: entry.note,
+        createdAt: entry.created_at,
+      }),
+    ),
+  };
+}
+
+async function loadPaymentSettlement(
+  db: D1Database,
+  orderId: string,
+): Promise<PreorderPaymentSettlement | null> {
+  const row = await getPreorderPaymentSettlementByOrderId(db, orderId);
+  if (!row) return null;
+  const history = await listPreorderPaymentSettlementHistory(db, row.settlement_id);
+  return toPaymentSettlement(row, history);
+}
+
+async function applyCancelKeepingSnapshots(
+  db: D1Database,
+  order: PreorderOrderRow,
+  actor: { lineUserId: string; displayName: string },
+  cancellationReason: string,
+  historyNote: string | null,
+): Promise<PreorderOrder> {
+  const updatedAt = nowIso();
+  const items = await listPreorderOrderItems(db, order.order_id);
+  try {
+    await cancelSingleOrderAtomic(db, {
+      order,
+      items,
+      cancellationReason,
+      actorLineUserId: actor.lineUserId,
+      actorDisplayName: actor.displayName,
+      historyNote,
+      updatedAt,
+    });
+  } catch (error) {
+    if (error instanceof PreorderCancelBatchConflict) {
+      const latest = await getPreorderOrder(db, order.order_id);
+      if (latest?.status === 'CANCELLED') {
+        throw Errors.conflict('訂單已取消');
+      }
+      throw Errors.conflict('訂單狀態已變更，請重新整理後再試');
+    }
+    throw error;
+  }
+  const cancelled = await getPreorderOrder(db, order.order_id);
+  if (!cancelled || cancelled.status !== 'CANCELLED') {
+    throw Errors.conflict('訂單狀態已變更，請重新整理後再試');
+  }
+  return toOrder(db, cancelled);
+}
+
 async function toOrder(db: D1Database, row: PreorderOrderRow): Promise<PreorderOrder> {
   const items = await listPreorderOrderItems(db, row.order_id);
   const options = await listPreorderOrderItemOptions(
@@ -472,6 +564,7 @@ async function toOrder(db: D1Database, row: PreorderOrderRow): Promise<PreorderO
     paymentConfirmedAt: row.payment_confirmed_at,
     fulfilledAt: row.fulfilled_at,
     items: items.map((item) => toOrderItem(item, options)),
+    paymentSettlement: await loadPaymentSettlement(db, row.order_id),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1200,6 +1293,23 @@ export async function upsertMyPreorderOrder(
     return { order: await toOrder(db, existing), idempotencyHit: true };
   }
 
+  let insertKey = idempotencyKey?.trim() || null;
+  if (insertKey) {
+    const priorByKey = await getOrderByIdempotencyKey(db, offerId, user.lineUserId, insertKey);
+    if (existing) {
+      if (priorByKey?.status === 'CANCELLED' && priorByKey.order_id !== existing.order_id) {
+        return { order: await toOrder(db, existing), idempotencyHit: true };
+      }
+    } else {
+      if (priorByKey && priorByKey.status !== 'CANCELLED') {
+        return { order: await toOrder(db, priorByKey), idempotencyHit: true };
+      }
+      if (priorByKey?.status === 'CANCELLED') {
+        insertKey = `${insertKey}:${newId()}`;
+      }
+    }
+  }
+
   const previousItems = existing ? await listPreorderOrderItems(db, existing.order_id) : [];
   const optionGroups = await listPreorderOptionGroups(
     db,
@@ -1278,7 +1388,7 @@ export async function upsertMyPreorderOrder(
         payment_reported_at: null,
         payment_confirmed_at: null,
         fulfilled_at: null,
-        idempotency_key: idempotencyKey?.trim() || null,
+        idempotency_key: insertKey,
         created_at: updatedAt,
         updated_at: updatedAt,
       });
@@ -1354,11 +1464,17 @@ export async function getMyPreorderOrder(
   offerId: string,
   user: AuthUser,
   groupId: string,
-): Promise<PreorderOrder | null> {
+): Promise<MyPreorderOrderResponse> {
   await assertOfferInGroup(db, offerId, groupId);
-  const row = await getActiveOrderForBuyer(db, offerId, user.lineUserId);
-  if (!row) return null;
-  return toOrder(db, row);
+  const [active, cancelledRows] = await Promise.all([
+    getActiveOrderForBuyer(db, offerId, user.lineUserId),
+    listCancelledOrdersForBuyerOnOffer(db, offerId, user.lineUserId),
+  ]);
+  const [order, cancelledOrders] = await Promise.all([
+    active ? toOrder(db, active) : Promise.resolve(null),
+    Promise.all(cancelledRows.map((row) => toOrder(db, row))),
+  ]);
+  return { order, cancelledOrders };
 }
 
 export async function reportMyPreorderPayment(
@@ -1411,30 +1527,15 @@ export async function cancelMyPreorderOrder(
   if (!['PENDING_PAYMENT', 'PAYMENT_REPORTED'].includes(order.status)) {
     throw Errors.conflict('目前狀態無法取消訂單');
   }
-  const updatedAt = nowIso();
-  const items = await listPreorderOrderItems(db, order.order_id);
-  for (const item of items) {
-    await adjustProductOrderedQuantity(db, item.product_id, -item.quantity, updatedAt);
-  }
-  await updatePreorderOrderRow(db, order.order_id, {
-    status: 'CANCELLED',
-    totalAmount: order.total_amount,
-    cancellationReason: (reason || '').trim().slice(0, 200) || '買家取消',
-    paymentReportedAt: order.payment_reported_at,
-    paymentConfirmedAt: order.payment_confirmed_at,
-    fulfilledAt: order.fulfilled_at,
-    updatedAt,
-  });
-  await insertOrderStatusHistory(db, {
-    historyId: newId(),
-    orderId: order.order_id,
-    fromStatus: order.status,
-    toStatus: 'CANCELLED',
-    changedByLineUserId: user.lineUserId,
-    reason: (reason || '').trim().slice(0, 200) || '買家取消',
-    createdAt: updatedAt,
-  });
-  return toOrder(db, (await getPreorderOrder(db, order.order_id))!);
+  const rawReason = (reason || '').trim().slice(0, 200);
+  const cancellationReason = rawReason || '買家取消';
+  return applyCancelKeepingSnapshots(
+    db,
+    order,
+    { lineUserId: user.lineUserId, displayName: user.displayName },
+    cancellationReason,
+    rawReason || null,
+  );
 }
 
 async function requireProviderOrder(
@@ -1529,31 +1630,60 @@ export async function cancelPreorderOrderByProvider(
 ): Promise<PreorderOrder> {
   const { order } = await requireProviderOrder(db, offerId, orderId, user, groupId);
   if (order.status === 'CANCELLED') throw Errors.conflict('訂單已取消');
+  if (order.status === 'FULFILLED') throw Errors.conflict('已完成訂單不可取消');
+  if (!['PENDING_PAYMENT', 'PAYMENT_REPORTED', 'PAYMENT_CONFIRMED'].includes(order.status)) {
+    throw Errors.conflict('目前狀態無法取消訂單');
+  }
   const trimmed = (reason || '').trim();
   if (!trimmed) throw Errors.validation('請填寫取消原因');
-  const updatedAt = nowIso();
-  const items = await listPreorderOrderItems(db, order.order_id);
-  for (const item of items) {
-    await adjustProductOrderedQuantity(db, item.product_id, -item.quantity, updatedAt);
+  return applyCancelKeepingSnapshots(
+    db,
+    order,
+    { lineUserId: user.lineUserId, displayName: user.displayName },
+    trimmed.slice(0, 200),
+    trimmed.slice(0, 200),
+  );
+}
+
+export async function reportPreorderSettlementHandled(
+  db: D1Database,
+  offerId: string,
+  orderId: string,
+  user: AuthUser,
+  groupId: string,
+  note: string,
+): Promise<PreorderOrder> {
+  const { order } = await requireProviderOrder(db, offerId, orderId, user, groupId);
+  const settlement = await getPreorderPaymentSettlementByOrderId(db, order.order_id);
+  if (!settlement) {
+    throw Errors.conflict('此訂單無需款項處理紀錄');
   }
-  await updatePreorderOrderRow(db, order.order_id, {
-    status: 'CANCELLED',
-    totalAmount: order.total_amount,
-    cancellationReason: trimmed.slice(0, 200),
-    paymentReportedAt: order.payment_reported_at,
-    paymentConfirmedAt: order.payment_confirmed_at,
-    fulfilledAt: order.fulfilled_at,
-    updatedAt,
-  });
-  await insertOrderStatusHistory(db, {
-    historyId: newId(),
-    orderId: order.order_id,
-    fromStatus: order.status,
-    toStatus: 'CANCELLED',
-    changedByLineUserId: user.lineUserId,
-    reason: trimmed.slice(0, 200),
-    createdAt: updatedAt,
-  });
+  if (settlement.status === 'PROVIDER_REPORTED_SETTLED') {
+    throw Errors.conflict('已回報處理，無需重複回報');
+  }
+  if (
+    settlement.status !== 'AWAITING_RECEIPT_CHECK' &&
+    settlement.status !== 'REFUND_PENDING'
+  ) {
+    throw Errors.conflict('已回報處理，無需重複回報');
+  }
+
+  const updatedAt = nowIso();
+  try {
+    await reportSettlementHandledAtomic(db, {
+      settlement,
+      note,
+      actorLineUserId: user.lineUserId,
+      actorDisplayName: user.displayName,
+      historyId: newId(),
+      updatedAt,
+    });
+  } catch (error) {
+    if (error instanceof PreorderCancelBatchConflict) {
+      throw Errors.conflict('已回報處理，無需重複回報');
+    }
+    throw error;
+  }
   return toOrder(db, (await getPreorderOrder(db, order.order_id))!);
 }
 
@@ -1659,15 +1789,27 @@ export async function assertRegistrationCancelAllowedForPreorders(
     );
   }
   const updatedAt = nowIso();
-  const cancelledOrderIds = await cancelOpenOrdersForBuyerOnEvent(
-    db,
-    eventId,
-    lineUserId,
-    '因取消活動報名而取消訂單',
-    updatedAt,
-  );
+  const reason = '因取消活動報名而取消訂單';
+  let cancelledOrders;
+  try {
+    cancelledOrders = await cancelOpenOrdersForBuyerOnEvent(
+      db,
+      eventId,
+      lineUserId,
+      reason,
+      updatedAt,
+    );
+  } catch (error) {
+    if (error instanceof PreorderCancelBatchTooLarge) {
+      throw Errors.conflict('代訂訂單過多，請先逐筆取消後再取消報名');
+    }
+    if (error instanceof PreorderCancelBatchConflict) {
+      throw Errors.conflict('訂單狀態已變更，請重新整理後再試');
+    }
+    throw error;
+  }
   await cancelEmptyOffersForProvider(db, eventId, lineUserId, updatedAt);
-  return { cancelledOrderIds };
+  return { cancelledOrderIds: cancelledOrders.map((order) => order.order_id) };
 }
 
 export async function assertEventDeleteAllowedForPreorders(

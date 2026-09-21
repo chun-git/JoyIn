@@ -1,4 +1,8 @@
-import type { PreorderOfferStatus, PreorderOrderStatus } from '../../shared/types';
+import type {
+  PreorderOfferStatus,
+  PreorderOrderStatus,
+  PreorderPaymentSettlementStatus,
+} from '../../shared/types';
 import { taipeiParts, toEventAt } from '../../shared/datetime';
 
 export function formatIsoDateTime(iso: string): string {
@@ -74,6 +78,21 @@ export function orderStatusTone(
       return 'fulfilled';
     case 'CANCELLED':
       return 'cancelled';
+    default:
+      return 'pending';
+  }
+}
+
+export function settlementStatusTone(
+  status: PreorderPaymentSettlementStatus,
+): 'pending' | 'reported' | 'settled' {
+  switch (status) {
+    case 'AWAITING_RECEIPT_CHECK':
+      return 'pending';
+    case 'REFUND_PENDING':
+      return 'reported';
+    case 'PROVIDER_REPORTED_SETTLED':
+      return 'settled';
     default:
       return 'pending';
   }

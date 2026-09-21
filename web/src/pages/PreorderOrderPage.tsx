@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
+  PREORDER_CANCELLED_WITHOUT_SETTLEMENT,
   PREORDER_PAYMENT_DISCLAIMER,
+  PREORDER_REORDER_OPEN_SETTLEMENT_REMINDER,
+  isOpenPaymentSettlement,
   type PreorderOfferDetail,
   type PreorderOrder,
+  type PreorderOrderItem,
   type PreorderOrderItemOptionInput,
 } from '../../../shared/types';
 import { api } from '../api';
+import { PaymentSettlementProgress } from '../components/PaymentSettlementProgress';
 import { SiteNav } from '../components/SiteNav';
 import { StateBlock } from '../components/StateBlock';
 import type { LiffSession } from '../liff';
@@ -20,7 +25,28 @@ import {
 } from '../preorder-format';
 import { usePolling } from '../use-polling';
 
-type OptionSelection = { valueIds: string[]; textValue: string };
+function orderItemLine(item: PreorderOrderItem) {
+  return (
+    <li className="preorder-wrap" key={item.orderItemId}>
+      {item.productNameSnapshot} × {item.quantity} = ${item.subtotal}
+      {item.options.length ? (
+        <small className="preorder-item-options">
+          {item.options
+            .map((option) =>
+              option.textValueSnapshot
+                ? `${option.groupNameSnapshot}：${option.textValueSnapshot}`
+                : `${option.groupNameSnapshot}：${option.optionNameSnapshot}${
+                    option.priceAdjustmentSnapshot
+                      ? ` ${option.priceAdjustmentSnapshot > 0 ? '+' : ''}$${option.priceAdjustmentSnapshot}`
+                      : ''
+                  }`,
+            )
+            .join('、')}
+        </small>
+      ) : null}
+    </li>
+  );
+}
 
 interface CartLine {
   cartLineId: string;
@@ -28,6 +54,8 @@ interface CartLine {
   quantity: number;
   options: PreorderOrderItemOptionInput[];
 }
+
+type OptionSelection = { valueIds: string[]; textValue: string };
 
 function normalizedOptionsKey(options: PreorderOrderItemOptionInput[]): string {
   return options
@@ -47,6 +75,7 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
   const navigate = useNavigate();
   const [offer, setOffer] = useState<PreorderOfferDetail | null>(null);
   const [order, setOrder] = useState<PreorderOrder | null>(null);
+  const [cancelledOrders, setCancelledOrders] = useState<PreorderOrder[]>([]);
   const [draftQty, setDraftQty] = useState<Record<string, number>>({});
   const [draftSelections, setDraftSelections] = useState<
     Record<string, Record<string, OptionSelection>>
@@ -60,6 +89,7 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
   const [loading, setLoading] = useState(true);
   const [dirty, setDirty] = useState(false);
   const dirtyRef = useRef(false);
+  const submitKeyRef = useRef<string | null>(null);
   const [syncHint, setSyncHint] = useState('');
 
   const applyOrderFromServer = (detail: PreorderOfferDetail, mine: PreorderOrder | null) => {
@@ -110,6 +140,8 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
       if (options?.signal?.aborted) return;
       setOffer(detail.offer);
       setOrder(mine.order);
+      setCancelledOrders(mine.cancelledOrders ?? []);
+      if (mine.order) submitKeyRef.current = null;
       if (options?.forceQty || !dirtyRef.current) {
         applyOrderFromServer(detail.offer, mine.order);
       }
@@ -348,7 +380,10 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
         quantity: line.quantity,
         options: line.options,
       }));
-      const key = order?.orderId || `order-${offerId}-${session.lineUserId}`;
+      const key =
+        order?.orderId ||
+        (submitKeyRef.current ??=
+          globalThis.crypto?.randomUUID?.() ?? `order-${offerId}-${session.lineUserId}-${Date.now()}`);
       const result = await api.upsertMyPreorderOrder(session, offerId, items, key);
       setOrder(result.order);
       setNotice(order ? '訂單已更新' : '訂單已送出');
@@ -423,6 +458,31 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
           </Link>
         ) : null}
       </section>
+
+      {cancelledOrders.length > 0 ? (
+        <section className="panel stack" role="region" aria-label="已取消訂單">
+          <h2>已取消訂單</h2>
+          {cancelledOrders.map((cancelled) => (
+            <article className="preorder-order-card" key={cancelled.orderId}>
+              <p className={`preorder-status tone-${orderStatusTone(cancelled.status)}`}>
+                {orderStatusLabel(cancelled.status)}
+              </p>
+              {cancelled.cancellationReason ? (
+                <p className="hint preorder-wrap">取消原因：{cancelled.cancellationReason}</p>
+              ) : null}
+              <p className="hint">總金額：${cancelled.totalAmount}</p>
+              {cancelled.items.length > 0 ? (
+                <ul className="preorder-summary-list">{cancelled.items.map(orderItemLine)}</ul>
+              ) : null}
+              {cancelled.paymentSettlement ? (
+                <PaymentSettlementProgress settlement={cancelled.paymentSettlement} />
+              ) : (
+                <p className="hint">{PREORDER_CANCELLED_WITHOUT_SETTLEMENT}</p>
+              )}
+            </article>
+          ))}
+        </section>
+      ) : null}
 
       <section className="panel stack">
         <h2>商品</h2>
@@ -627,28 +687,7 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
             {orderStatusLabel(order.status)}
           </p>
           <p className="hint">總金額：${order.totalAmount}</p>
-          <ul className="preorder-summary-list">
-            {order.items.map((item) => (
-              <li className="preorder-wrap" key={item.orderItemId}>
-                {item.productNameSnapshot} × {item.quantity} = ${item.subtotal}
-                {item.options.length ? (
-                  <small className="preorder-item-options">
-                    {item.options
-                      .map((option) =>
-                        option.textValueSnapshot
-                          ? `${option.groupNameSnapshot}：${option.textValueSnapshot}`
-                          : `${option.groupNameSnapshot}：${option.optionNameSnapshot}${
-                              option.priceAdjustmentSnapshot
-                                ? ` ${option.priceAdjustmentSnapshot > 0 ? '+' : ''}$${option.priceAdjustmentSnapshot}`
-                                : ''
-                            }`,
-                      )
-                      .join('、')}
-                  </small>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+          <ul className="preorder-summary-list">{order.items.map(orderItemLine)}</ul>
           {confirmedLocked ? (
             <p className="hint">訂單已確認付款，如需取消請聯絡代訂者處理。</p>
           ) : null}
@@ -767,6 +806,9 @@ export function PreorderOrderPage({ session }: { session: LiffSession }) {
             <h2 className="modal-title">確認訂單</h2>
             <div className="stack modal-body">
               <p className="hint">{PREORDER_PAYMENT_DISCLAIMER}</p>
+              {cancelledOrders.some((item) => isOpenPaymentSettlement(item.paymentSettlement)) ? (
+                <p className="hint">{PREORDER_REORDER_OPEN_SETTLEMENT_REMINDER}</p>
+              ) : null}
               <ul className="preorder-summary-list">
                 {lines.map((line) => (
                   <li key={line.cartLineId} className="preorder-wrap">

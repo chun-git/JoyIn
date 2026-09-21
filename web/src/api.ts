@@ -8,6 +8,7 @@ import type {
   EventPreorderListResponse,
   EventSummary,
   HistoryEventSummary,
+  MyPreorderOrderResponse,
   PreorderOfferDetail,
   PreorderOfferOrderSummary,
   PreorderOrder,
@@ -326,7 +327,7 @@ export const api = {
   getPreorderSummary: (session: LiffSession, offerId: string) =>
     request<{ summary: PreorderOfferOrderSummary }>(`/api/preorders/${offerId}/summary`, session),
   getMyPreorderOrder: (session: LiffSession, offerId: string) =>
-    request<{ order: PreorderOrder | null }>(`/api/preorders/${offerId}/my-order`, session),
+    request<MyPreorderOrderResponse>(`/api/preorders/${offerId}/my-order`, session),
   upsertMyPreorderOrder: (
     session: LiffSession,
     offerId: string,
@@ -366,6 +367,17 @@ export const api = {
       `/api/preorders/${offerId}/orders/${orderId}/cancel`,
       session,
       { method: 'POST', body: JSON.stringify({ reason }) },
+    ),
+  reportPreorderSettlementHandled: (
+    session: LiffSession,
+    offerId: string,
+    orderId: string,
+    note: string,
+  ) =>
+    request<{ order: PreorderOrder }>(
+      `/api/preorders/${offerId}/orders/${orderId}/settlement/report-handled`,
+      session,
+      { method: 'POST', body: JSON.stringify({ note }) },
     ),
   listSharedMenus: (session: LiffSession, search = '') =>
     request<{ menus: SharedMenuSummary[] }>(

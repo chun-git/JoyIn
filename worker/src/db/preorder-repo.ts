@@ -1,4 +1,4 @@
-import { asBoolean } from '../lib/ids';
+import { asBoolean, newId } from '../lib/ids';
 
 export type PreorderOfferStatus = 'OPEN' | 'CLOSED' | 'CANCELLED';
 export type PreorderOrderStatus =
@@ -106,6 +106,41 @@ export interface PreorderOrderItemOptionRow {
   option_name_snapshot: string;
   price_adjustment_snapshot: number;
   text_value_snapshot: string | null;
+  created_at: string;
+}
+
+export type PreorderPaymentSettlementStatus =
+  | 'AWAITING_RECEIPT_CHECK'
+  | 'REFUND_PENDING'
+  | 'PROVIDER_REPORTED_SETTLED';
+
+export type PreorderPaymentSettlementSourceStatus = 'PAYMENT_REPORTED' | 'PAYMENT_CONFIRMED';
+
+export interface PreorderPaymentSettlementRow {
+  settlement_id: string;
+  order_id: string;
+  offer_id: string;
+  buyer_line_user_id: string;
+  status: PreorderPaymentSettlementStatus;
+  source_order_status: PreorderPaymentSettlementSourceStatus;
+  created_by_line_user_id: string;
+  created_by_display_name: string;
+  latest_note: string | null;
+  settled_reported_at: string | null;
+  settled_reported_by_line_user_id: string | null;
+  settled_reported_by_display_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PreorderPaymentSettlementHistoryRow {
+  history_id: string;
+  settlement_id: string;
+  from_status: PreorderPaymentSettlementStatus | null;
+  to_status: PreorderPaymentSettlementStatus;
+  actor_line_user_id: string;
+  actor_display_name: string;
+  note: string | null;
   created_at: string;
 }
 
@@ -419,6 +454,23 @@ export async function getActiveOrderForBuyer(
          WHERE offer_id = ? AND buyer_line_user_id = ? AND status != 'CANCELLED'`,
       )
       .bind(offerId, buyerLineUserId)
+      .first<PreorderOrderRow>()) ?? null
+  );
+}
+
+export async function getOrderByIdempotencyKey(
+  db: D1Database,
+  offerId: string,
+  buyerLineUserId: string,
+  idempotencyKey: string,
+): Promise<PreorderOrderRow | null> {
+  return (
+    (await db
+      .prepare(
+        `SELECT * FROM preorder_orders
+         WHERE offer_id = ? AND buyer_line_user_id = ? AND idempotency_key = ?`,
+      )
+      .bind(offerId, buyerLineUserId, idempotencyKey)
       .first<PreorderOrderRow>()) ?? null
   );
 }
@@ -880,13 +932,228 @@ export async function countActiveOrdersForEventOffersByProvider(
   };
 }
 
+export const CANCEL_BATCH_ABORT_MESSAGE = 'JOYIN_CANCEL_ABORT';
+export const D1_BATCH_STATEMENT_LIMIT = 50;
+
+export class PreorderCancelBatchConflict extends Error {
+  constructor(message = CANCEL_BATCH_ABORT_MESSAGE) {
+    super(message);
+    this.name = 'PreorderCancelBatchConflict';
+  }
+}
+
+export class PreorderCancelBatchTooLarge extends Error {
+  constructor() {
+    super('JOYIN_CANCEL_TOO_LARGE');
+    this.name = 'PreorderCancelBatchTooLarge';
+  }
+}
+
+export type CancelOrderBatchInput = {
+  order: PreorderOrderRow;
+  items: Array<{ product_id: string; quantity: number }>;
+  cancellationReason: string;
+  actorLineUserId: string;
+  actorDisplayName: string;
+  historyNote: string | null;
+  updatedAt: string;
+  orderHistoryId: string;
+  settlementId: string;
+  settlementHistoryId: string;
+};
+
+function settlementStatusForCancelledSource(
+  status: PreorderOrderStatus,
+): PreorderPaymentSettlementStatus | null {
+  if (status === 'PAYMENT_REPORTED') return 'AWAITING_RECEIPT_CHECK';
+  if (status === 'PAYMENT_CONFIRMED') return 'REFUND_PENDING';
+  return null;
+}
+
+function prepareAbortIfMissing(
+  db: D1Database,
+  sql: string,
+  values: unknown[],
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO preorder_order_status_history (
+         history_id, order_id, from_status, to_status, changed_by_line_user_id, reason, created_at
+       )
+       SELECT NULL, NULL, NULL, NULL, NULL, NULL, NULL
+       WHERE NOT EXISTS (${sql})`,
+    )
+    .bind(...values);
+}
+
+export function buildCancelOrderStatements(
+  db: D1Database,
+  input: CancelOrderBatchInput,
+): D1PreparedStatement[] {
+  const statements: D1PreparedStatement[] = [
+    db
+      .prepare(
+        `UPDATE preorder_orders
+         SET status = 'CANCELLED',
+             cancellation_reason = ?,
+             updated_at = ?
+         WHERE order_id = ? AND status = ?`,
+      )
+      .bind(
+        input.cancellationReason,
+        input.updatedAt,
+        input.order.order_id,
+        input.order.status,
+      ),
+    prepareAbortIfMissing(
+      db,
+      `SELECT 1 FROM preorder_orders
+       WHERE order_id = ? AND status = 'CANCELLED' AND updated_at = ?`,
+      [input.order.order_id, input.updatedAt],
+    ),
+  ];
+
+  const qtyByProduct = new Map<string, number>();
+  for (const item of input.items) {
+    const quantity = Number(item.quantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) continue;
+    qtyByProduct.set(item.product_id, (qtyByProduct.get(item.product_id) ?? 0) + quantity);
+  }
+  for (const [productId, quantity] of qtyByProduct) {
+    statements.push(
+      db
+        .prepare(
+          `UPDATE preorder_products
+           SET ordered_quantity = ordered_quantity - ?, updated_at = ?
+           WHERE product_id = ? AND ordered_quantity >= ?`,
+        )
+        .bind(quantity, input.updatedAt, productId, quantity),
+    );
+    statements.push(
+      prepareAbortIfMissing(
+        db,
+        `SELECT 1 FROM preorder_products WHERE product_id = ? AND updated_at = ?`,
+        [productId, input.updatedAt],
+      ),
+    );
+  }
+
+  statements.push(
+    db
+      .prepare(
+        `INSERT INTO preorder_order_status_history (
+          history_id, order_id, from_status, to_status, changed_by_line_user_id, reason, created_at
+        ) VALUES (?, ?, ?, 'CANCELLED', ?, ?, ?)`,
+      )
+      .bind(
+        input.orderHistoryId,
+        input.order.order_id,
+        input.order.status,
+        input.actorLineUserId,
+        input.cancellationReason,
+        input.updatedAt,
+      ),
+  );
+
+  const settlementStatus = settlementStatusForCancelledSource(input.order.status);
+  if (settlementStatus) {
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO preorder_payment_settlements (
+            settlement_id, order_id, offer_id, buyer_line_user_id, status, source_order_status,
+            created_by_line_user_id, created_by_display_name, latest_note,
+            settled_reported_at, settled_reported_by_line_user_id, settled_reported_by_display_name,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)`,
+        )
+        .bind(
+          input.settlementId,
+          input.order.order_id,
+          input.order.offer_id,
+          input.order.buyer_line_user_id,
+          settlementStatus,
+          input.order.status,
+          input.actorLineUserId,
+          input.actorDisplayName,
+          input.updatedAt,
+          input.updatedAt,
+        ),
+    );
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO preorder_payment_settlement_history (
+            history_id, settlement_id, from_status, to_status,
+            actor_line_user_id, actor_display_name, note, created_at
+          ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          input.settlementHistoryId,
+          input.settlementId,
+          settlementStatus,
+          input.actorLineUserId,
+          input.actorDisplayName,
+          input.historyNote,
+          input.updatedAt,
+        ),
+    );
+  }
+
+  return statements;
+}
+
+export function isCancelBatchAbort(error: unknown): boolean {
+  if (error instanceof PreorderCancelBatchConflict) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes(CANCEL_BATCH_ABORT_MESSAGE) ||
+    message.includes('NOT NULL') ||
+    message.includes('not null') ||
+    message.includes('FOREIGN KEY')
+  );
+}
+
+export async function applyPreorderCancelBatch(
+  db: D1Database,
+  statements: D1PreparedStatement[],
+): Promise<void> {
+  try {
+    await db.batch(statements);
+  } catch (error) {
+    if (isCancelBatchAbort(error)) {
+      throw new PreorderCancelBatchConflict();
+    }
+    throw error;
+  }
+}
+
+export async function cancelSingleOrderAtomic(
+  db: D1Database,
+  input: Omit<CancelOrderBatchInput, 'orderHistoryId' | 'settlementId' | 'settlementHistoryId'> & {
+    orderHistoryId?: string;
+    settlementId?: string;
+    settlementHistoryId?: string;
+  },
+): Promise<void> {
+  await applyPreorderCancelBatch(
+    db,
+    buildCancelOrderStatements(db, {
+      ...input,
+      orderHistoryId: input.orderHistoryId ?? newId(),
+      settlementId: input.settlementId ?? newId(),
+      settlementHistoryId: input.settlementHistoryId ?? newId(),
+    }),
+  );
+}
+
 export async function cancelOpenOrdersForBuyerOnEvent(
   db: D1Database,
   eventId: string,
   buyerLineUserId: string,
   reason: string,
   updatedAt: string,
-): Promise<string[]> {
+): Promise<PreorderOrderRow[]> {
   const { results } = await db
     .prepare(
       `SELECT * FROM preorder_orders
@@ -897,22 +1164,263 @@ export async function cancelOpenOrdersForBuyerOnEvent(
     .bind(eventId, buyerLineUserId)
     .all<PreorderOrderRow>();
   const orders = results ?? [];
+  if (orders.length === 0) return [];
+
+  const statements: D1PreparedStatement[] = [];
   for (const order of orders) {
     const items = await listPreorderOrderItems(db, order.order_id);
-    for (const item of items) {
-      await adjustProductOrderedQuantity(db, item.product_id, -item.quantity, updatedAt);
-    }
-    await updatePreorderOrderRow(db, order.order_id, {
-      status: 'CANCELLED',
-      totalAmount: order.total_amount,
-      cancellationReason: reason,
-      paymentReportedAt: order.payment_reported_at,
-      paymentConfirmedAt: order.payment_confirmed_at,
-      fulfilledAt: order.fulfilled_at,
-      updatedAt,
-    });
+    statements.push(
+      ...buildCancelOrderStatements(db, {
+        order,
+        items,
+        cancellationReason: reason,
+        actorLineUserId: buyerLineUserId,
+        actorDisplayName: order.buyer_display_name,
+        historyNote: reason,
+        updatedAt,
+        orderHistoryId: newId(),
+        settlementId: newId(),
+        settlementHistoryId: newId(),
+      }),
+    );
   }
-  return orders.map((o) => o.order_id);
+  if (statements.length > D1_BATCH_STATEMENT_LIMIT) {
+    throw new PreorderCancelBatchTooLarge();
+  }
+  await applyPreorderCancelBatch(db, statements);
+  return orders;
+}
+
+export async function listCancelledOrdersForBuyerOnOffer(
+  db: D1Database,
+  offerId: string,
+  buyerLineUserId: string,
+): Promise<PreorderOrderRow[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM preorder_orders
+       WHERE offer_id = ? AND buyer_line_user_id = ? AND status = 'CANCELLED'
+       ORDER BY updated_at DESC, created_at DESC`,
+    )
+    .bind(offerId, buyerLineUserId)
+    .all<PreorderOrderRow>();
+  return results ?? [];
+}
+
+export async function insertPreorderPaymentSettlement(
+  db: D1Database,
+  values: PreorderPaymentSettlementRow,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO preorder_payment_settlements (
+        settlement_id, order_id, offer_id, buyer_line_user_id, status, source_order_status,
+        created_by_line_user_id, created_by_display_name, latest_note,
+        settled_reported_at, settled_reported_by_line_user_id, settled_reported_by_display_name,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      values.settlement_id,
+      values.order_id,
+      values.offer_id,
+      values.buyer_line_user_id,
+      values.status,
+      values.source_order_status,
+      values.created_by_line_user_id,
+      values.created_by_display_name,
+      values.latest_note,
+      values.settled_reported_at,
+      values.settled_reported_by_line_user_id,
+      values.settled_reported_by_display_name,
+      values.created_at,
+      values.updated_at,
+    )
+    .run();
+}
+
+export async function insertPreorderPaymentSettlementHistory(
+  db: D1Database,
+  values: PreorderPaymentSettlementHistoryRow,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO preorder_payment_settlement_history (
+        history_id, settlement_id, from_status, to_status,
+        actor_line_user_id, actor_display_name, note, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      values.history_id,
+      values.settlement_id,
+      values.from_status,
+      values.to_status,
+      values.actor_line_user_id,
+      values.actor_display_name,
+      values.note,
+      values.created_at,
+    )
+    .run();
+}
+
+export async function getPreorderPaymentSettlementByOrderId(
+  db: D1Database,
+  orderId: string,
+): Promise<PreorderPaymentSettlementRow | null> {
+  return (
+    (await db
+      .prepare(`SELECT * FROM preorder_payment_settlements WHERE order_id = ?`)
+      .bind(orderId)
+      .first<PreorderPaymentSettlementRow>()) ?? null
+  );
+}
+
+export async function listPreorderPaymentSettlementsByOrderIds(
+  db: D1Database,
+  orderIds: string[],
+): Promise<PreorderPaymentSettlementRow[]> {
+  if (orderIds.length === 0) return [];
+  const placeholders = orderIds.map(() => '?').join(', ');
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM preorder_payment_settlements
+       WHERE order_id IN (${placeholders})`,
+    )
+    .bind(...orderIds)
+    .all<PreorderPaymentSettlementRow>();
+  return results ?? [];
+}
+
+export async function listPreorderPaymentSettlementHistory(
+  db: D1Database,
+  settlementId: string,
+): Promise<PreorderPaymentSettlementHistoryRow[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM preorder_payment_settlement_history
+       WHERE settlement_id = ?
+       ORDER BY created_at ASC, history_id ASC`,
+    )
+    .bind(settlementId)
+    .all<PreorderPaymentSettlementHistoryRow>();
+  return results ?? [];
+}
+
+export async function listPreorderPaymentSettlementHistoryBySettlementIds(
+  db: D1Database,
+  settlementIds: string[],
+): Promise<PreorderPaymentSettlementHistoryRow[]> {
+  if (settlementIds.length === 0) return [];
+  const placeholders = settlementIds.map(() => '?').join(', ');
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM preorder_payment_settlement_history
+       WHERE settlement_id IN (${placeholders})
+       ORDER BY created_at ASC, history_id ASC`,
+    )
+    .bind(...settlementIds)
+    .all<PreorderPaymentSettlementHistoryRow>();
+  return results ?? [];
+}
+
+export async function markPreorderPaymentSettlementHandled(
+  db: D1Database,
+  settlementId: string,
+  values: {
+    latestNote: string;
+    settledReportedAt: string;
+    settledReportedByLineUserId: string;
+    settledReportedByDisplayName: string;
+    updatedAt: string;
+  },
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE preorder_payment_settlements
+       SET status = 'PROVIDER_REPORTED_SETTLED',
+           latest_note = ?,
+           settled_reported_at = ?,
+           settled_reported_by_line_user_id = ?,
+           settled_reported_by_display_name = ?,
+           updated_at = ?
+       WHERE settlement_id = ?
+         AND status IN ('AWAITING_RECEIPT_CHECK', 'REFUND_PENDING')`,
+    )
+    .bind(
+      values.latestNote,
+      values.settledReportedAt,
+      values.settledReportedByLineUserId,
+      values.settledReportedByDisplayName,
+      values.updatedAt,
+      settlementId,
+    )
+    .run();
+  return (result.meta.changes ?? 0) === 1;
+}
+
+export async function reportSettlementHandledAtomic(
+  db: D1Database,
+  input: {
+    settlement: PreorderPaymentSettlementRow;
+    note: string;
+    actorLineUserId: string;
+    actorDisplayName: string;
+    historyId: string;
+    updatedAt: string;
+  },
+): Promise<void> {
+  const statements = [
+    db
+      .prepare(
+        `UPDATE preorder_payment_settlements
+         SET status = 'PROVIDER_REPORTED_SETTLED',
+             latest_note = ?,
+             settled_reported_at = ?,
+             settled_reported_by_line_user_id = ?,
+             settled_reported_by_display_name = ?,
+             updated_at = ?
+         WHERE settlement_id = ?
+           AND status IN ('AWAITING_RECEIPT_CHECK', 'REFUND_PENDING')`,
+      )
+      .bind(
+        input.note,
+        input.updatedAt,
+        input.actorLineUserId,
+        input.actorDisplayName,
+        input.updatedAt,
+        input.settlement.settlement_id,
+      ),
+    prepareAbortIfMissing(
+      db,
+      `SELECT 1 FROM preorder_payment_settlements
+       WHERE settlement_id = ? AND status = 'PROVIDER_REPORTED_SETTLED' AND updated_at = ?`,
+      [input.settlement.settlement_id, input.updatedAt],
+    ),
+    db
+      .prepare(
+        `INSERT INTO preorder_payment_settlement_history (
+          history_id, settlement_id, from_status, to_status,
+          actor_line_user_id, actor_display_name, note, created_at
+        ) VALUES (?, ?, ?, 'PROVIDER_REPORTED_SETTLED', ?, ?, ?, ?)`,
+      )
+      .bind(
+        input.historyId,
+        input.settlement.settlement_id,
+        input.settlement.status,
+        input.actorLineUserId,
+        input.actorDisplayName,
+        input.note,
+        input.updatedAt,
+      ),
+  ];
+  try {
+    await db.batch(statements);
+  } catch (error) {
+    if (isCancelBatchAbort(error)) {
+      throw new PreorderCancelBatchConflict();
+    }
+    throw error;
+  }
 }
 
 export async function cancelEmptyOffersForProvider(

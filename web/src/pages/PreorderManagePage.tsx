@@ -2,11 +2,18 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   PREORDER_PAYMENT_DISCLAIMER,
+  PREORDER_PROVIDER_CANCEL_CONFIRMED_HINT,
+  PREORDER_PROVIDER_CANCEL_REPORTED_HINT,
+  PREORDER_PROVIDER_REPORT_SETTLED_HINT,
+  isOpenPaymentSettlement,
   type PreorderOfferDetail,
   type PreorderOfferOrderSummary,
+  type PreorderOrder,
   type PreorderOrderStatus,
 } from '../../../shared/types';
 import { api } from '../api';
+import { Modal } from '../components/Modal';
+import { PaymentSettlementProgress } from '../components/PaymentSettlementProgress';
 import { SiteNav } from '../components/SiteNav';
 import { StateBlock } from '../components/StateBlock';
 import type { LiffSession } from '../liff';
@@ -38,6 +45,12 @@ export function PreorderManagePage({ session }: { session: LiffSession }) {
   const [pending, setPending] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncHint, setSyncHint] = useState('');
+  const [cancelTarget, setCancelTarget] = useState<PreorderOrder | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelError, setCancelError] = useState('');
+  const [settleTarget, setSettleTarget] = useState<PreorderOrder | null>(null);
+  const [settleNote, setSettleNote] = useState('');
+  const [settleError, setSettleError] = useState('');
 
   const reload = useCallback(
     async (signal?: AbortSignal) => {
@@ -74,19 +87,20 @@ export function PreorderManagePage({ session }: { session: LiffSession }) {
     },
     {
       intervalMs: 10_000,
-      enabled: Boolean(offerId) && !pending,
+      enabled: Boolean(offerId) && !pending && !cancelTarget && !settleTarget,
       onConsecutiveFailures: () => setSyncHint('訂單同步暫時失敗，仍顯示目前內容'),
       onRecovered: () => setSyncHint(''),
     },
   );
 
-  async function run(action: () => Promise<unknown>, success: string) {
+  async function run(action: () => Promise<unknown>, success: string): Promise<boolean> {
     setPending(true);
     setError('');
     try {
       await action();
       await reload();
       setNotice(success);
+      return true;
     } catch (err) {
       setError(preorderErrorMessage(err, '操作失敗'));
       if (isPreorderConflict(err)) {
@@ -96,8 +110,79 @@ export function PreorderManagePage({ session }: { session: LiffSession }) {
           /* keep */
         }
       }
+      return false;
     } finally {
       setPending(false);
+    }
+  }
+
+  function openCancelModal(order: PreorderOrder) {
+    setCancelTarget(order);
+    setCancelReason('');
+    setCancelError('');
+  }
+
+  function closeCancelModal() {
+    if (pending) return;
+    setCancelTarget(null);
+    setCancelReason('');
+    setCancelError('');
+  }
+
+  function openSettleModal(order: PreorderOrder) {
+    setSettleTarget(order);
+    setSettleNote('');
+    setSettleError('');
+  }
+
+  function closeSettleModal() {
+    if (pending) return;
+    setSettleTarget(null);
+    setSettleNote('');
+    setSettleError('');
+  }
+
+  function cancelHintFor(order: PreorderOrder): string | null {
+    if (order.status === 'PAYMENT_REPORTED') return PREORDER_PROVIDER_CANCEL_REPORTED_HINT;
+    if (order.status === 'PAYMENT_CONFIRMED') return PREORDER_PROVIDER_CANCEL_CONFIRMED_HINT;
+    return null;
+  }
+
+  async function submitCancelOrder() {
+    if (!cancelTarget) return;
+    const reason = cancelReason.trim();
+    if (reason.length < 1 || reason.length > 200) {
+      setCancelError('請輸入 1 到 200 字的取消原因');
+      return;
+    }
+    setCancelError('');
+    const ok = await run(
+      () => api.cancelPreorderOrder(session, offerId, cancelTarget.orderId, reason),
+      '已取消訂單',
+    );
+    if (ok) {
+      setCancelTarget(null);
+      setCancelReason('');
+      setCancelError('');
+    }
+  }
+
+  async function submitSettlementHandled() {
+    if (!settleTarget) return;
+    const note = settleNote.trim();
+    if (note.length < 1 || note.length > 200) {
+      setSettleError('請輸入 1 到 200 字的處理說明');
+      return;
+    }
+    setSettleError('');
+    const ok = await run(
+      () => api.reportPreorderSettlementHandled(session, offerId, settleTarget.orderId, note),
+      '已回報處理',
+    );
+    if (ok) {
+      setSettleTarget(null);
+      setSettleNote('');
+      setSettleError('');
     }
   }
 
@@ -231,9 +316,12 @@ export function PreorderManagePage({ session }: { session: LiffSession }) {
               ))}
             </ul>
             {order.cancellationReason ? (
-              <p className="hint">取消原因：{order.cancellationReason}</p>
+              <p className="hint preorder-wrap">取消原因：{order.cancellationReason}</p>
             ) : null}
-            <div className="row">
+            {order.paymentSettlement ? (
+              <PaymentSettlementProgress settlement={order.paymentSettlement} />
+            ) : null}
+            <div className="row preorder-card-actions">
               {order.status === 'PAYMENT_REPORTED' || order.status === 'PENDING_PAYMENT' ? (
                 <button
                   className="btn btn-compact"
@@ -264,19 +352,22 @@ export function PreorderManagePage({ session }: { session: LiffSession }) {
                   標記完成
                 </button>
               ) : null}
+              {isOpenPaymentSettlement(order.paymentSettlement) ? (
+                <button
+                  className="btn secondary btn-compact"
+                  type="button"
+                  disabled={pending}
+                  onClick={() => openSettleModal(order)}
+                >
+                  回報已處理
+                </button>
+              ) : null}
               {order.status !== 'CANCELLED' && order.status !== 'FULFILLED' ? (
                 <button
                   className="btn danger btn-compact"
                   type="button"
                   disabled={pending}
-                  onClick={() => {
-                    const reason = window.prompt('請輸入取消原因');
-                    if (!reason?.trim()) return;
-                    void run(
-                      () => api.cancelPreorderOrder(session, offerId, order.orderId, reason.trim()),
-                      '已取消訂單',
-                    );
-                  }}
+                  onClick={() => openCancelModal(order)}
                 >
                   取消訂單
                 </button>
@@ -285,6 +376,70 @@ export function PreorderManagePage({ session }: { session: LiffSession }) {
           </article>
         ))}
       </section>
+
+      <Modal
+        open={Boolean(cancelTarget)}
+        title="取消訂單"
+        onClose={closeCancelModal}
+        initialFocus="first"
+      >
+        <div className="stack modal-body">
+          {cancelTarget && cancelHintFor(cancelTarget) ? (
+            <p className="hint">{cancelHintFor(cancelTarget)}</p>
+          ) : (
+            <p className="hint">請輸入取消原因</p>
+          )}
+          <label className="field">
+            <span>取消原因（1–200 字）</span>
+            <textarea
+              rows={3}
+              maxLength={200}
+              value={cancelReason}
+              disabled={pending}
+              onChange={(event) => setCancelReason(event.target.value)}
+            />
+          </label>
+          {cancelError ? <p className="error modal-inline-error">{cancelError}</p> : null}
+        </div>
+        <div className="modal-actions">
+          <button className="btn secondary" type="button" disabled={pending} onClick={closeCancelModal}>
+            返回
+          </button>
+          <button className="btn danger" type="button" disabled={pending} onClick={() => void submitCancelOrder()}>
+            {pending ? '處理中…' : '確認取消'}
+          </button>
+        </div>
+      </Modal>
+
+      <Modal
+        open={Boolean(settleTarget)}
+        title="回報已處理"
+        onClose={closeSettleModal}
+        initialFocus="first"
+      >
+        <div className="stack modal-body">
+          <p className="hint">{PREORDER_PROVIDER_REPORT_SETTLED_HINT}</p>
+          <label className="field">
+            <span>處理說明（1–200 字）</span>
+            <textarea
+              rows={3}
+              maxLength={200}
+              value={settleNote}
+              disabled={pending}
+              onChange={(event) => setSettleNote(event.target.value)}
+            />
+          </label>
+          {settleError ? <p className="error modal-inline-error">{settleError}</p> : null}
+        </div>
+        <div className="modal-actions">
+          <button className="btn secondary" type="button" disabled={pending} onClick={closeSettleModal}>
+            返回
+          </button>
+          <button className="btn" type="button" disabled={pending} onClick={() => void submitSettlementHandled()}>
+            {pending ? '送出中…' : '確認回報'}
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }
